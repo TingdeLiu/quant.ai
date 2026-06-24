@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant-ai"
+version = "0.1.0"
+description = "面向普通股民的美股量化研究与回测工具：一行命令分析个股，给出可解释的评级与关键价位。"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Tyndall Labs" }]
+keywords = ["quant", "stocks", "us-equities", "backtest", "technical-analysis", "yfinance"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "pyarrow>=15.0",
+    "yfinance>=0.2.40",
+    "PyYAML>=6.0",
+    "pydantic>=2.7",
+    "typer>=0.12",
+    "rich>=13.7",
+    "matplotlib>=3.8",
+    "scikit-learn>=1.4",
+    "mcp>=1.20",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2", "pytest-cov>=5.0", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/Tyndall-Labs/quant.ai"
+Repository = "https://github.com/Tyndall-Labs/quant.ai"
+Issues = "https://github.com/Tyndall-Labs/quant.ai/issues"
+
+[project.scripts]
+quant-ai = "quant_agent.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["quant_agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/F: pyflakes+pycodestyle, I: isort, UP: pyupgrade, B: bugbear, SIM: simplify
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# E501 行宽交给 formatter；B008 与 typer 的 Argument/Option 默认值用法冲突。
+ignore = ["E501", "B008"]

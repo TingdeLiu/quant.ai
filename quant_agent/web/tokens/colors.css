@@ -1,0 +1,109 @@
+/* ============================================================
+   COLORS — Anthropic / Claude
+   Warm ivory canvas, near-black "kraft" ink, signature clay accent.
+   Base ramps first, then semantic aliases.
+   ============================================================ */
+
+:root {
+  /* ---- Brand: Clay (Claude's signature terracotta) ---- */
+  --clay-50:  #FBF0EB;
+  --clay-100: #F4D9CC;
+  --clay-200: #EBBBA5;
+  --clay-300: #E29C7E;
+  --clay-400: #D97757;  /* core Claude orange */
+  --clay-500: #CC785C;  /* "crail" — slightly deeper, used on text-bg */
+  --clay-600: #B65A3C;
+  --clay-700: #8F4329;
+  --clay-800: #6B321F;
+
+  /* ---- Warm neutral ramp ("kraft") ---- */
+  --kraft-950: #141413;  /* near-black ink */
+  --kraft-900: #1F1E1D;
+  --kraft-800: #30302E;
+  --kraft-700: #3D3D3A;
+  --kraft-600: #54534D;
+  --kraft-500: #6E6E68;
+  --kraft-400: #91918C;
+  --kraft-300: #B5B3A9;
+  --kraft-200: #D8D6CC;
+  --kraft-150: #E3E1D7;
+  --kraft-100: #ECE9DF;  /* "cloud" — warm panel */
+  --kraft-75:  #F2F0E9;
+  --kraft-50:  #F5F4EE;
+  --kraft-25:  #FAF9F5;  /* ivory canvas */
+  --white:     #FFFFFF;
+
+  /* ---- Muted, earthy semantics (Anthropic stays restrained) ---- */
+  --green-500:  #5A7052;  /* success */
+  --green-50:   #ECEFE7;
+  --amber-500:  #B07B3C;  /* warning */
+  --amber-50:   #F6EDDD;
+  --red-500:    #BF4D43;  /* danger / error */
+  --red-50:     #F6E2DF;
+  --blue-500:   #4F6B8F;  /* info */
+  --blue-50:    #E3E9F0;
+
+  /* ============================================================
+     SEMANTIC ALIASES — reference these in components
+     ============================================================ */
+
+  /* Surfaces */
+  --surface-canvas:    var(--kraft-25);   /* page background */
+  --surface-raised:    var(--white);      /* cards, sheets */
+  --surface-sunken:    var(--kraft-100);  /* wells, code blocks, inputs */
+  --surface-panel:     var(--kraft-75);   /* sidebars, secondary panels */
+  --surface-inverse:   var(--kraft-950);  /* dark sections */
+  --surface-overlay:   rgba(20, 20, 19, 0.45); /* scrim behind modals */
+
+  /* Text */
+  --text-primary:    var(--kraft-950);
+  --text-secondary:  var(--kraft-600);
+  --text-tertiary:   var(--kraft-400);
+  --text-inverse:    var(--kraft-25);
+  --text-accent:     var(--clay-600);
+  --text-on-accent:  var(--white);
+  --text-link:       var(--clay-600);
+
+  /* Borders & dividers */
+  --border-subtle:   var(--kraft-150);
+  --border-default:  var(--kraft-200);
+  --border-strong:   var(--kraft-300);
+  --border-accent:   var(--clay-400);
+  --border-inverse:  rgba(255, 255, 255, 0.14);
+
+  /* Accent (interactive brand) */
+  --accent:          var(--clay-400);
+  --accent-hover:    var(--clay-500);
+  --accent-active:   var(--clay-600);
+  --accent-subtle:   var(--clay-50);
+
+  /* Focus ring */
+  --focus-ring:      var(--clay-400);
+
+  /* Status fills */
+  --status-success:  var(--green-500);
+  --status-success-bg: var(--green-50);
+  --status-warning:  var(--amber-500);
+  --status-warning-bg: var(--amber-50);
+  --status-danger:   var(--red-500);
+  --status-danger-bg:  var(--red-50);
+  --status-info:     var(--blue-500);
+  --status-info-bg:    var(--blue-50);
+}
+
+/* Dark scope — used on inverse marketing sections & the Mythos page */
+.theme-dark,
+[data-theme="dark"] {
+  --surface-canvas:   var(--kraft-950);
+  --surface-raised:   var(--kraft-900);
+  --surface-sunken:   #0E0E0D;
+  --surface-panel:    var(--kraft-900);
+  --text-primary:     var(--kraft-25);
+  --text-secondary:   var(--kraft-300);
+  --text-tertiary:    var(--kraft-500);
+  --text-inverse:     var(--kraft-950);
+  --border-subtle:    rgba(255,255,255,0.08);
+  --border-default:   rgba(255,255,255,0.14);
+  --border-strong:    rgba(255,255,255,0.24);
+  --accent-subtle:    rgba(217,119,87,0.16);
+}

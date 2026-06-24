@@ -1,0 +1,169 @@
+symbol,name,sector
+AAPL,Apple,科技
+MSFT,Microsoft,科技
+ORCL,Oracle,科技
+CRM,Salesforce,科技
+ADBE,Adobe,科技
+NOW,ServiceNow,科技
+INTU,Intuit,科技
+IBM,IBM,科技
+CSCO,Cisco,科技
+ACN,Accenture,科技
+SAP,SAP,科技
+PANW,Palo Alto Networks,科技
+SNOW,Snowflake,科技
+CRWD,CrowdStrike,科技
+DDOG,Datadog,科技
+SHOP,Shopify,科技
+UBER,Uber,科技
+PLTR,Palantir,科技
+NVDA,NVIDIA,半导体
+AMD,Advanced Micro Devices,半导体
+AVGO,Broadcom,半导体
+QCOM,Qualcomm,半导体
+INTC,Intel,半导体
+TXN,Texas Instruments,半导体
+MU,Micron,半导体
+AMAT,Applied Materials,半导体
+LRCX,Lam Research,半导体
+KLAC,KLA,半导体
+ADI,Analog Devices,半导体
+MRVL,Marvell,半导体
+NXPI,NXP Semiconductors,半导体
+ASML,ASML,半导体
+TSM,Taiwan Semiconductor,半导体
+GOOGL,Alphabet Class A,互联网与媒体
+GOOG,Alphabet Class C,互联网与媒体
+META,Meta Platforms,互联网与媒体
+NFLX,Netflix,互联网与媒体
+DIS,Walt Disney,互联网与媒体
+CMCSA,Comcast,互联网与媒体
+T,AT&T,互联网与媒体
+VZ,Verizon,互联网与媒体
+TMUS,T-Mobile,互联网与媒体
+SPOT,Spotify,互联网与媒体
+TTD,Trade Desk,互联网与媒体
+PINS,Pinterest,互联网与媒体
+SNAP,Snap,互联网与媒体
+AMZN,Amazon,可选消费
+TSLA,Tesla,可选消费
+HD,Home Depot,可选消费
+LOW,Lowe's,可选消费
+MCD,McDonald's,可选消费
+SBUX,Starbucks,可选消费
+NKE,Nike,可选消费
+BKNG,Booking Holdings,可选消费
+TJX,TJX Companies,可选消费
+MAR,Marriott,可选消费
+GM,General Motors,可选消费
+F,Ford,可选消费
+LULU,Lululemon,可选消费
+CMG,Chipotle,可选消费
+ABNB,Airbnb,可选消费
+WMT,Walmart,必需消费
+COST,Costco,必需消费
+PG,Procter & Gamble,必需消费
+KO,Coca-Cola,必需消费
+PEP,PepsiCo,必需消费
+PM,Philip Morris,必需消费
+MO,Altria,必需消费
+MDLZ,Mondelez,必需消费
+CL,Colgate-Palmolive,必需消费
+KMB,Kimberly-Clark,必需消费
+TGT,Target,必需消费
+KHC,Kraft Heinz,必需消费
+GIS,General Mills,必需消费
+JPM,JPMorgan Chase,金融
+BAC,Bank of America,金融
+WFC,Wells Fargo,金融
+C,Citigroup,金融
+GS,Goldman Sachs,金融
+MS,Morgan Stanley,金融
+V,Visa,金融
+MA,Mastercard,金融
+AXP,American Express,金融
+BLK,BlackRock,金融
+SCHW,Charles Schwab,金融
+SPGI,S&P Global,金融
+BRK-B,Berkshire Hathaway B,金融
+PYPL,PayPal,金融
+COF,Capital One,金融
+LLY,Eli Lilly,医疗健康
+UNH,UnitedHealth,医疗健康
+JNJ,Johnson & Johnson,医疗健康
+MRK,Merck,医疗健康
+ABBV,AbbVie,医疗健康
+PFE,Pfizer,医疗健康
+TMO,Thermo Fisher,医疗健康
+ABT,Abbott,医疗健康
+DHR,Danaher,医疗健康
+AMGN,Amgen,医疗健康
+BMY,Bristol-Myers Squibb,医疗健康
+GILD,Gilead Sciences,医疗健康
+CVS,CVS Health,医疗健康
+ISRG,Intuitive Surgical,医疗健康
+MDT,Medtronic,医疗健康
+VRTX,Vertex Pharmaceuticals,医疗健康
+REGN,Regeneron,医疗健康
+XOM,Exxon Mobil,能源
+CVX,Chevron,能源
+COP,ConocoPhillips,能源
+SLB,Schlumberger,能源
+EOG,EOG Resources,能源
+MPC,Marathon Petroleum,能源
+PSX,Phillips 66,能源
+VLO,Valero Energy,能源
+OXY,Occidental Petroleum,能源
+WMB,Williams Companies,能源
+KMI,Kinder Morgan,能源
+HAL,Halliburton,能源
+CAT,Caterpillar,工业
+DE,Deere,工业
+HON,Honeywell,工业
+GE,GE Aerospace,工业
+BA,Boeing,工业
+RTX,RTX,工业
+LMT,Lockheed Martin,工业
+UPS,United Parcel Service,工业
+UNP,Union Pacific,工业
+GD,General Dynamics,工业
+MMM,3M,工业
+EMR,Emerson Electric,工业
+ETN,Eaton,工业
+CSX,CSX,工业
+NOC,Northrop Grumman,工业
+LIN,Linde,材料
+SHW,Sherwin-Williams,材料
+APD,Air Products,材料
+ECL,Ecolab,材料
+FCX,Freeport-McMoRan,材料
+NEM,Newmont,材料
+NUE,Nucor,材料
+DOW,Dow,材料
+DD,DuPont,材料
+PPG,PPG Industries,材料
+NEE,NextEra Energy,公用事业
+DUK,Duke Energy,公用事业
+SO,Southern Company,公用事业
+D,Dominion Energy,公用事业
+AEP,American Electric Power,公用事业
+EXC,Exelon,公用事业
+SRE,Sempra,公用事业
+XEL,Xcel Energy,公用事业
+ED,Consolidated Edison,公用事业
+PEG,Public Service Enterprise,公用事业
+PLD,Prologis,房地产
+AMT,American Tower,房地产
+EQIX,Equinix,房地产
+CCI,Crown Castle,房地产
+PSA,Public Storage,房地产
+O,Realty Income,房地产
+SPG,Simon Property,房地产
+WELL,Welltower,房地产
+DLR,Digital Realty,房地产
+AVB,AvalonBay,房地产
+SPY,SPDR S&P 500 ETF,宽基ETF
+QQQ,Invesco QQQ Trust,宽基ETF
+DIA,SPDR Dow Jones ETF,宽基ETF
+IWM,iShares Russell 2000 ETF,宽基ETF
+VTI,Vanguard Total Market ETF,宽基ETF

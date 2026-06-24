@@ -1,0 +1,43 @@
+data:
+  source: yfinance
+  start: '2020-01-01'
+  end: null
+  cache_dir: data/cache
+  universe_path: configs/universe_default.csv
+strategy:
+  benchmark: SPY
+  top_n: 5
+  rebalance_frequency: M
+  initial_cash: 100000
+  transaction_cost_bps: 10
+  slippage_bps: 5
+  signal_weights:
+    momentum_12_1: 0.5
+    trend_20_50: 0.0
+    reversal_1m: 0.5
+    low_volatility: 0.0
+risk:
+  max_position_weight: 0.25
+  max_positions: 5
+  min_avg_dollar_volume: 10000000
+  max_turnover: 2.0
+  long_only: true
+report:
+  output_dir: reports/recommended
+evaluation:
+  periods:
+  - name: train
+    start: '2020-01-01'
+    end: '2022-12-31'
+  - name: validation
+    start: '2023-01-01'
+    end: '2024-12-31'
+  - name: test
+    start: '2025-01-01'
+    end: null
+optimization:
+  enabled: true
+  train_period: train
+  validation_period: validation
+  objective: sharpe
+  max_drawdown_floor: -0.5

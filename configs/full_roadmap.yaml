@@ -1,0 +1,144 @@
+data:
+  source: yfinance
+  start: "2020-01-01"
+  end: null
+  cache_dir: data/cache
+  universe_path: configs/universe_default.csv
+
+strategy:
+  benchmark: SPY
+  top_n: 5
+  rebalance_frequency: M
+  initial_cash: 100000
+  transaction_cost_bps: 10
+  slippage_bps: 5
+  signal_weights:
+    momentum_12_1: 1.0
+    trend_20_50: 1.0
+    reversal_1m: 1.0
+    low_volatility: 1.0
+    ml_rank: 1.0
+
+risk:
+  max_position_weight: 0.25
+  max_positions: 5
+  min_avg_dollar_volume: 10000000
+  max_turnover: 2.0
+  long_only: true
+
+report:
+  output_dir: reports/full_roadmap/current
+
+evaluation:
+  periods:
+    - name: train
+      start: "2020-01-01"
+      end: "2022-12-31"
+    - name: validation
+      start: "2023-01-01"
+      end: "2024-12-31"
+    - name: test
+      start: "2025-01-01"
+      end: null
+
+optimization:
+  enabled: true
+  train_period: train
+  validation_period: validation
+  objective: sharpe
+  max_drawdown_floor: -0.5
+  walk_forward_enabled: true
+  walk_forward_windows:
+    - name: wf_2022
+      train_start: "2020-01-01"
+      train_end: "2021-12-31"
+      validation_start: "2022-01-01"
+      validation_end: "2022-12-31"
+    - name: wf_2023
+      train_start: "2021-01-01"
+      train_end: "2022-12-31"
+      validation_start: "2023-01-01"
+      validation_end: "2023-12-31"
+    - name: wf_2024
+      train_start: "2022-01-01"
+      train_end: "2023-12-31"
+      validation_start: "2024-01-01"
+      validation_end: "2024-12-31"
+
+ml:
+  enabled: true
+  train_period: train
+  prediction_horizon_days: 21
+  model_version: ridge_v1
+  feature_version: technical_v1
+
+llm:
+  enabled: false
+  provider: openai-compatible
+  model: gpt-4.1-mini
+  endpoint: null
+  api_key_env: OPENAI_API_KEY
+  prompt_version: research_review_v1
+
+market_intel:
+  enabled: true
+  # 留空则写入 report.output_dir，便于 dashboard 文件列表直接展示
+  output_dir: reports/full_roadmap/current
+  # 当 llm.enabled 且配置了 api_key 时，会用大模型把新闻+量化数据综合成叙述；否则回落结构化模板
+  use_llm: true
+  max_news_items: 24
+  symbol_news_count: 8
+  max_symbol_news: 3
+  request_timeout: 12
+  # 免费财经 RSS 源：不配置该项即使用内置默认源（Yahoo / CNBC / MarketWatch / Investing）。
+  # 若要自定义，取消下面注释并按 name/url 列出；显式写成空列表 [] 则表示不抓取任何媒体新闻。
+  # news_feeds:
+  #   - name: "Yahoo Finance"
+  #     url: "https://finance.yahoo.com/news/rssindex"
+  # X / 社交平台观点：默认关闭。如需启用，置 social_enabled: true 并填入可用的 nitter/RSS 源
+  social_enabled: false
+  # social_feeds:
+  #   - name: "@example_trader"
+  #     url: "https://nitter.net/example_trader/rss"
+
+paper_trading:
+  enabled: true
+  account_value: 100000
+  max_order_notional: 25000
+  output_dir: reports/full_roadmap/paper
+
+dashboard:
+  enabled: true
+  output_path: reports/full_roadmap/current/dashboard.html
+  service_dir: reports/full_roadmap/service
+  runs_dir: reports/full_roadmap/runs
+
+dashboard_security:
+  # 本地单机使用，关闭 API token 认证；如需对外暴露请改回 true 并设置 QUANT_AGENT_DASHBOARD_TOKEN
+  enabled: false
+  token_env: QUANT_AGENT_DASHBOARD_TOKEN
+  audit_log_path: reports/full_roadmap/service/dashboard_audit.jsonl
+
+schedule:
+  enabled: false
+  interval_minutes: 1440
+  run_on_start: false
+
+alerts:
+  enabled: true
+  max_drawdown_floor: -0.35
+  min_sharpe: 0.5
+  max_stale_rows: 0
+  require_paper_approval: true
+
+notifications:
+  enabled: true
+  min_severity: warning
+  channels:
+    - file
+  output_dir: reports/full_roadmap/notifications
+  webhook_url_env: QUANT_AGENT_WEBHOOK_URL
+
+approvals:
+  require_manual_paper_approval: true
+  allow_broker_submit_after_approval: false

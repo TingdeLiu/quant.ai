@@ -1,0 +1,49 @@
+/* ============================================================
+   TYPOGRAPHY — Anthropic / Claude
+   Serif for editorial/display & marketing headlines (Tiempos-like).
+   Sans for product UI, labels, dense data (Styrene-like).
+   Mono for code & tokens.
+   ============================================================ */
+
+:root {
+  /* ---- Family roles (semantic) ---- */
+  --font-display: var(--font-serif);  /* big marketing headlines */
+  --font-heading: var(--font-sans);   /* product UI headings */
+  --font-body:    var(--font-sans);   /* UI body & labels */
+  --font-prose:   var(--font-serif);  /* long-form reading, model replies */
+  --font-code:    var(--font-mono);
+
+  /* ---- Type scale (1.20 minor-third-ish, tuned) ---- */
+  --text-2xs:  11px;
+  --text-xs:   12px;
+  --text-sm:   13px;
+  --text-base: 15px;   /* default UI body */
+  --text-md:   17px;
+  --text-lg:   20px;
+  --text-xl:   24px;
+  --text-2xl:  30px;
+  --text-3xl:  38px;
+  --text-4xl:  48px;
+  --text-5xl:  62px;
+  --text-6xl:  80px;
+
+  /* ---- Weights ---- */
+  --weight-light:    300;
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  /* ---- Line heights ---- */
+  --leading-tight:   1.08;  /* display */
+  --leading-snug:    1.22;  /* headings */
+  --leading-normal:  1.5;   /* UI body */
+  --leading-relaxed: 1.62;  /* prose */
+
+  /* ---- Letter spacing ---- */
+  --tracking-tight:  -0.02em;  /* large display */
+  --tracking-snug:   -0.01em;  /* headings */
+  --tracking-normal: 0;
+  --tracking-wide:   0.04em;   /* eyebrows / all-caps labels */
+  --tracking-caps:   0.08em;
+}

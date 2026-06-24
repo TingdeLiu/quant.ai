@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_tmp/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+data/cache/
+reports/
+*.egg-info/
+
+# quant-ai init 生成的个人化股票池与偏好（因人而异，不入库）
+configs/my_universe.csv
+configs/my.yaml
+configs/profile.json
+
+# 本地 Claude Code 设置（个人权限白名单，不入库）
+.claude/settings.local.json

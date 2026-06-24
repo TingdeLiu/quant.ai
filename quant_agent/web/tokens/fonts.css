@@ -1,0 +1,18 @@
+/* ============================================================
+   FONTS — Anthropic / Claude
+   Brand uses Styrene A/B (sans) + Tiempos (serif) + a code mono.
+   Those are licensed; here we load the closest Google Fonts:
+     - Styrene  -> Hanken Grotesk  (geometric grotesque, near-identical proportions)
+     - Tiempos  -> Newsreader      (literary transitional serif w/ optical sizes)
+     - mono     -> Fira Code       (clean code mono)
+   SUBSTITUTION — swap these @font-face/links for the real licensed
+   webfonts when available (see readme.md > VISUAL FOUNDATIONS).
+   ============================================================ */
+
+@import url("https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,300..800;1,300..600&family=Newsreader:ital,opsz,wght@0,6..72,300..600;1,6..72,300..500&family=Fira+Code:wght@400;500&display=swap");
+
+:root {
+  --font-sans:  "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: "Newsreader", ui-serif, Georgia, "Times New Roman", serif;
+  --font-mono:  "Fira Code", ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+}

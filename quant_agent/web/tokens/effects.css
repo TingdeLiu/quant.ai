@@ -1,0 +1,36 @@
+/* ============================================================
+   EFFECTS — radii, shadows, motion — Anthropic / Claude
+   Soft, warm shadows (never pure-black). Calm, quick motion.
+   Corners are gently rounded, never pill-everything.
+   ============================================================ */
+
+:root {
+  /* ---- Radii ---- */
+  --radius-xs:   4px;
+  --radius-sm:   6px;
+  --radius-md:   10px;   /* default control / card */
+  --radius-lg:   14px;
+  --radius-xl:   20px;
+  --radius-2xl:  28px;
+  --radius-pill: 999px;
+  --radius-round: 50%;
+
+  /* ---- Shadows (warm-tinted, low-contrast) ---- */
+  --shadow-xs:  0 1px 2px rgba(20, 20, 19, 0.05);
+  --shadow-sm:  0 1px 3px rgba(20, 20, 19, 0.06), 0 1px 2px rgba(20, 20, 19, 0.04);
+  --shadow-md:  0 4px 12px rgba(20, 20, 19, 0.07), 0 1px 3px rgba(20, 20, 19, 0.05);
+  --shadow-lg:  0 12px 28px rgba(20, 20, 19, 0.10), 0 2px 6px rgba(20, 20, 19, 0.06);
+  --shadow-xl:  0 24px 56px rgba(20, 20, 19, 0.14), 0 4px 12px rgba(20, 20, 19, 0.07);
+  --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.32);
+
+  /* Inset for sunken wells / inputs */
+  --shadow-inset: inset 0 1px 2px rgba(20, 20, 19, 0.05);
+
+  /* ---- Motion ---- */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1); /* @kind other */     /* most UI transitions */
+  --ease-out:      cubic-bezier(0.16, 1, 0.3, 1); /* @kind other */  /* entrances */
+  --ease-in:       cubic-bezier(0.4, 0, 1, 1);     /* @kind other */
+  --duration-fast:   120ms;  /* @kind other */
+  --duration-normal: 200ms;  /* @kind other */
+  --duration-slow:   360ms;  /* @kind other */
+}

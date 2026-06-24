@@ -1,0 +1,28 @@
+/* ============================================================
+   SPACING & LAYOUT — Anthropic / Claude
+   4px base grid. Generous whitespace; marketing breathes.
+   ============================================================ */
+
+:root {
+  --space-0:   0;
+  --space-px:  1px;
+  --space-1:   4px;
+  --space-2:   8px;
+  --space-3:   12px;
+  --space-4:   16px;
+  --space-5:   20px;
+  --space-6:   24px;
+  --space-8:   32px;
+  --space-10:  40px;
+  --space-12:  48px;
+  --space-16:  64px;
+  --space-20:  80px;
+  --space-24:  96px;
+  --space-32:  128px;
+
+  /* Container widths */
+  --container-prose: 680px;   /* reading measure */
+  --container-app:   1280px;  /* product shell */
+  --container-wide:  1440px;  /* marketing */
+  --gutter:          24px;
+}
