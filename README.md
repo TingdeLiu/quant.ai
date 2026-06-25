@@ -1,6 +1,7 @@
 # quant.ai
 
-> **One command to research any US stock** — explainable ratings and key price levels, in seconds. No account, no API key, no setup.
+> **Quant research for US stocks, built to live inside your AI assistant.**
+> Plug it into **Claude or Codex** via [MCP](https://modelcontextprotocol.io) and ask about any ticker — get explainable ratings, key levels, and the reasoning, then *discuss it in the same chat*. Also works as a one-command CLI.
 
 [English](README.md) | [中文](README_CN.md)
 
@@ -25,28 +26,32 @@ No entry point? `python -m quant_agent analyze AAPL` works the same.
 
 ## What you get
 
-```text
-AAPL — 偏多   (rating: mildly bullish · confidence: medium)
+<img src="assets/analyze-example.svg" alt="Real output of quant-ai analyze AAPL" width="820">
 
-  最新价 (last)      226.34    as of 2025-06-20
-  区间涨跌 (returns) 1M +3.2% · 3M +8.1% · 6M +12.4% · 1Y +18.0%
-  RSI / 波动 (vol)   RSI 58.3 · annualized vol 24.5%
-  均线 (MAs)         MA20 220.15 · MA50 212.40 · MA200 198.70
-  解读 (note)        多头排列，动量偏强；回踩 MA20 不破即偏多
-  依据 (reasons)     站上所有均线 · 12-1 动量为正 · RSI 健康
-  参考关注位 (levels) 支撑 212.40 · 参考止损 205.10
+Real output from `quant-ai analyze AAPL`. The five ratings range from 强烈看多 *(strong buy)* through 中性 *(neutral)* to 强烈看空 *(strong sell)*. Add `--output-dir` to export Markdown + JSON, or `--chart` for a price/MA/RSI PNG.
+
+## Use it inside Claude or Codex
+
+The headline feature — expose quant.ai as an [MCP](https://modelcontextprotocol.io) server and let your AI assistant call it:
+
+```bash
+claude mcp add quant-research -- python -m quant_agent.mcp_server
 ```
 
-The five ratings range from 强烈看多 *(strong buy)* through 中性 *(neutral)* to 强烈看空 *(strong sell)*. Add `--output-dir` to export Markdown + JSON, or `--chart` for a price/MA/RSI PNG. *(Numbers above are illustrative.)*
+Then just ask, in the same chat where you work:
+
+> *"What's the read on NVDA?"*  ·  *"Any long-term buy candidates today?"*  ·  *"Compare AAPL and MSFT."*
+
+Claude (or Codex) calls into real project data, shows you the quant analysis, and you discuss it inline — no separate website, no copy-pasting. See [README_CN.md](README_CN.md#集成到-claudemcp) for Claude Desktop / Codex config.
 
 ## Highlights
 
+- 🤖 **Lives inside your AI assistant — the headline feature.** Plug the built-in MCP server into **Claude or Codex** and ask *"what's the read on NVDA?"* It pulls real quant analysis from this project, so you **see the analysis and discuss it in one conversation**. Most stock-analysis tools are standalone websites — this one is embedded in the AI you already chat with.
 - 🎯 **Zero-config single-stock analysis** — `analyze AAPL` returns rating, returns, RSI, volatility, MA positions, support/stop levels, and human-readable reasons.
-- 🧩 **Personalized watchlist** — `quant-ai init` interactively builds a universe that is **2/3 your own picks** (companies + sectors you care about) and **1/3 discovered** by the engine from the wider market (top cross-sectional signals you didn't pick).
+- 🧩 **Personalized watchlist** — `quant-ai init` builds a universe that is **2/3 your own picks** (companies + sectors you care about) and **1/3 discovered** by the engine from the wider market.
 - 🔬 **Research backtests** — cross-sectional signals (12-1 momentum, 20/50 trend, 1-month reversal, low-vol), signal-weight search, **walk-forward** stability analysis, plus SPY and equal-weight baselines to separate alpha from beta.
-- 📊 **Local dashboard & daily market report** — a no-key market-intelligence brief (RSS headlines + quant signals) and an interactive Markets dashboard, served locally.
-- 🤖 **MCP server** — ask Claude things like "what's the read on NVDA?" and it calls into real project data.
-- 🛡️ **Safe by design** — deterministic signals + risk layer, friendly degradation on network/data errors (clear Chinese messages, no stack traces), paper trading only — never submits real orders.
+- 📊 **Local dashboard & daily market report** — a no-key market-intelligence brief and an interactive Markets dashboard, served locally.
+- 🛡️ **Safe by design** — deterministic signals + risk layer, friendly degradation on network/data errors, paper trading only — never submits real orders.
 
 ## Common commands
 
