@@ -16,5 +16,6 @@ configs/my_universe.csv
 configs/my.yaml
 configs/profile.json
 
-# 本地 Claude Code 设置（个人权限白名单，不入库）
+# 本地 Claude Code 设置与运行期产物（个人化，不入库）
 .claude/settings.local.json
+.claude/*.lock

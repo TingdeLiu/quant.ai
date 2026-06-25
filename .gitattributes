@@ -1,0 +1,7 @@
+# 统一文本文件用 LF，避免跨平台 CRLF 噪音
+* text=auto eol=lf
+
+# 二进制/资源不做行尾转换
+*.png binary
+*.svg text eol=lf
+*.csv text eol=lf
