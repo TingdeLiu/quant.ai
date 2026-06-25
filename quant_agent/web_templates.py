@@ -9,14 +9,16 @@ import json
 from typing import Any
 
 from quant_agent.config import AppConfig
+from quant_agent.i18n import normalize_language
 
 
 def build_home_html(config: AppConfig, status: dict[str, Any], history: list[dict[str, Any]] | None = None) -> str:
     report_dir = str(config.report.output_dir)
     history = history or []
     schedule_state = "enabled" if config.schedule.enabled else "disabled"
+    lang = normalize_language(config.language)
     return f"""<!doctype html>
-<html lang="zh-CN">
+<html lang="{'zh-CN' if lang == 'zh' else 'en'}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -185,7 +187,7 @@ const headerTranslations = {{
   en: {{}}
 }};
 function currentLanguage() {{
-  return localStorage.getItem('quantAgentLanguage') || 'zh';
+  return localStorage.getItem('quantAgentLanguage') || '{lang}';
 }}
 function t(key) {{
   const lang = currentLanguage();

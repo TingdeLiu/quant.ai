@@ -87,7 +87,7 @@ def run_research_backtest(config: AppConfig) -> dict[str, object]:
     write_data_quality_report(data_quality, config.report.output_dir)
     write_alerts(alerts, config.report.output_dir)
     if config.dashboard.enabled:
-        write_dashboard(config.report.output_dir, config.dashboard.output_path)
+        write_dashboard(config.report.output_dir, config.dashboard.output_path, config.language)
     return {"prices": prices, "signals": signals, "targets": targets, "risk_checks": risk_checks, **result}
 
 

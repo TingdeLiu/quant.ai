@@ -21,16 +21,34 @@ def test_market_report_builds_offline(tmp_path: Path) -> None:
         "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
     }
     config = parse_config(raw, base=tmp_path)
-    report = build_market_report(config)
+    report = build_market_report(config)  # English by default
 
     assert report["data_status"] == "ok"
     assert report["as_of_date"]
+    assert report["language"] == "en"
     assert set(RECOMMENDATION_PROFILES).issuperset(report["quant_candidates"].keys())
     assert report["news"] == []  # no feeds configured
-    assert "不构成投资建议" in report["disclaimer"]
+    assert "not investment advice" in report["disclaimer"]
     # Renderers must not raise on the structured payload.
-    assert "今日美股研究简报" in render_markdown(report)
+    assert "Daily US Equity Research Brief" in render_markdown(report)
     assert "<html" in render_html(report)
+
+
+def test_market_report_chinese(tmp_path: Path) -> None:
+    csv_path = tmp_path / "prices.csv"
+    _synthetic_prices(periods=620).to_csv(csv_path, index=False)
+    raw = {
+        "data": {"source": "csv", "csv_path": str(csv_path), "universe": ["AAA", "BBB", "CCC", "SPY"]},
+        "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
+        "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
+        "language": "zh",
+    }
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config)
+    assert report["language"] == "zh"
+    assert "不构成投资建议" in report["disclaimer"]
+    assert "今日美股研究简报" in render_markdown(report)
+    assert "今日美股研究简报" in render_html(report)
 
 
 def test_markets_data_builds_offline(tmp_path: Path) -> None:

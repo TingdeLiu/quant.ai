@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 
 
-def write_dashboard(report_dir: Path, output_path: Path) -> None:
+def write_dashboard(report_dir: Path, output_path: Path, language: str = "en") -> None:
     audit = _load_json(report_dir / "audit.json")
     data_quality = _load_json(report_dir / "data_quality.json")
     paper_audit = _load_json(report_dir / "paper_trading_audit.json")
@@ -36,6 +36,7 @@ def write_dashboard(report_dir: Path, output_path: Path) -> None:
             trades=trades,
             orders=orders,
             recommendations=recommendations,
+            language="zh" if str(language).lower().startswith("zh") else "en",
         ),
         encoding="utf-8",
     )
@@ -56,6 +57,7 @@ def _html(
     trades: pd.DataFrame,
     orders: pd.DataFrame,
     recommendations: pd.DataFrame,
+    language: str = "en",
 ) -> str:
     metric_cards = "".join(
         f"<section><span>{_escape(key)}</span><strong>{_format(value)}</strong></section>"
@@ -68,7 +70,7 @@ def _html(
         f"({int(alert_summary.get('total', 0) or 0)})</strong></section>"
     )
     return f"""<!doctype html>
-<html lang="zh-CN">
+<html lang="{'zh-CN' if language == 'zh' else 'en'}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -255,7 +257,7 @@ function setLanguage(lang) {{
     th.textContent = headerTranslations[lang][th.dataset.originalText] || th.dataset.originalText;
   }});
 }}
-setLanguage(localStorage.getItem('quantAgentLanguage') || 'zh');
+setLanguage(localStorage.getItem('quantAgentLanguage') || '{language}');
 </script>
 </body>
 </html>

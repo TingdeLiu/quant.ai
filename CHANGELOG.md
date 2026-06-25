@@ -8,7 +8,7 @@
 ## [Unreleased]
 
 ### 新增
-- 双语输出（**英文默认 / 中文可选**）：新增轻量 `i18n` 模块，`analyze` 的评级、信心、理由、CLI 表格、Markdown 导出与免责声明全部双语；`quant-ai init` 首问语言（英文默认），偏好写入 profile/`my.yaml`；`analyze --lang en/zh` 可显式指定，未指定时沿用 init 选择。（recommendations / market-report / 仪表盘的双语化将分阶段补齐。）
+- 双语输出（**英文默认 / 中文可选**），全栈覆盖：新增轻量 `i18n` 模块；`analyze`（评级/信心/理由/CLI 表格/Markdown/免责声明）、`market-report`（每日报告 HTML+MD 全文）、`init` 全流程问答、以及静态/服务端 dashboard 默认语言都按所选语言渲染。`quant-ai init` 首问语言（英文默认），偏好写入 profile/`my.yaml`；`config.language` 贯穿；`analyze --lang en/zh`、`write-dashboard --lang` 可显式指定。
 - `init` 命令：首次使用交互式引导，问几个问题（感兴趣的板块、额外关注的公司、风险偏好）即可生成**个性化股票池**——2/3 来自用户自选（公司 + 板块的代表股），1/3 由系统在全市场候选目录里挑用户没选到的强势标的（按风险偏好对应的横截面信号打分）。输出 `configs/my_universe.csv` + `configs/my.yaml` + `configs/profile.json`；支持 `--non-interactive` / `--no-discovery`，无网络时优雅降级（只写自选部分并提示）。
 - `refresh-universe` 命令：用已保存的偏好重算「发现池」1/3（市场会变），自选 2/3 不变。
 - `analyze --watchlist`：直接分析个性化股票池 `configs/my_universe.csv`。

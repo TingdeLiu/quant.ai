@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml
 
+from quant_agent.i18n import normalize_language
+
 
 @dataclass(frozen=True)
 class DataConfig:
@@ -177,6 +179,7 @@ class AppConfig:
     alerts: AlertConfig
     notifications: NotificationConfig
     approvals: ApprovalConfig
+    language: str = "en"
 
 
 DEFAULT_NEWS_FEEDS: list[dict[str, str]] = [
@@ -366,6 +369,7 @@ def parse_config(raw: dict[str, Any], base: Path | None = None) -> AppConfig:
             require_manual_paper_approval=bool(approvals.get("require_manual_paper_approval", True)),
             allow_broker_submit_after_approval=bool(approvals.get("allow_broker_submit_after_approval", False)),
         ),
+        language=normalize_language(raw.get("language", "en")),
     )
 
 

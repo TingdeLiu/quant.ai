@@ -329,8 +329,9 @@ def market_report_command(
 def write_dashboard_command(
     report_dir: Path = typer.Argument(Path("reports/latest"), help="Report directory containing audit.json"),
     output: Path = typer.Option(Path("reports/latest/dashboard.html"), "--output", "-o"),
+    lang: str = typer.Option("en", "--lang", "-l", help="default dashboard language en/zh"),
 ) -> None:
-    write_dashboard(report_dir, output)
+    write_dashboard(report_dir, output, normalize_language(lang))
     console.print("[bold green]Dashboard written[/bold green]")
     console.print(f"Output: {output}")
 

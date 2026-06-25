@@ -85,9 +85,9 @@ def test_full_pipeline_writes_expected_outputs(tmp_path: Path) -> None:
     assert "equal_weight_total_return" in result["metrics"]
     assert "excess_vs_equal_weight" in result["metrics"]
     dashboard = (tmp_path / "reports" / "dashboard.html").read_text(encoding="utf-8")
-    assert '<html lang="zh-CN">' in dashboard
-    assert "setLanguage('zh')" in dashboard
-    assert "研究买入候选" in dashboard
+    assert '<html lang="en">' in dashboard  # English by default
+    assert "setLanguage('zh')" in dashboard  # bilingual switcher still present
+    assert "研究买入候选" in dashboard  # zh translations embedded for the toggle
 
 
 def test_data_quality_reports_metadata_columns() -> None:

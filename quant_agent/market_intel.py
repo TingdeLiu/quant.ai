@@ -26,44 +26,60 @@ import pandas as pd
 from quant_agent.config import AppConfig
 from quant_agent.data import load_prices
 from quant_agent.features import build_signals
+from quant_agent.i18n import normalize_language, tr
 from quant_agent.llm import generate_market_narrative
 from quant_agent.recommendations import RECOMMENDATION_PROFILES
 
-DISCLAIMER = (
-    "本报告仅用于量化研究与学习，不构成投资建议，也不是实盘交易授权。"
-    "所谓“适合关注”和“高风险”均为基于公开新闻与历史价格统计的研究候选，"
-    "任何真实交易都需要独立的数据校验、合规审查和风险控制。"
-)
+
+def _disclaimer(lang: str) -> str:
+    return tr(
+        "This report is for quantitative research and learning only — not investment advice, "
+        "and not authorization to trade. The 'worth watching' and 'high risk' lists are research "
+        "candidates from public news and historical-price statistics; any real trade needs "
+        "independent data validation, compliance review and risk control.",
+        "本报告仅用于量化研究与学习，不构成投资建议，也不是实盘交易授权。"
+        "所谓“适合关注”和“高风险”均为基于公开新闻与历史价格统计的研究候选，"
+        "任何真实交易都需要独立的数据校验、合规审查和风险控制。",
+        lang,
+    )
+
 
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
-# Display metadata for the holding-horizon recommendation cards.
+# Display metadata for the holding-horizon recommendation cards (en/zh).
 PROFILE_DISPLAY: dict[str, dict[str, Any]] = {
-    "long_term": {"zh": "长线", "horizon_zh": "6-12 个月", "tag": "趋势 / 低波动", "order": 1},
-    "swing": {"zh": "中线 · 波段", "horizon_zh": "1-3 个月", "tag": "趋势 / 反转", "order": 2},
-    "short_term": {"zh": "短线", "horizon_zh": "1-4 周", "tag": "反转 / 短趋势", "order": 3},
-    "defensive": {"zh": "防守", "horizon_zh": "3-12 个月", "tag": "低波动优先", "order": 4},
-    "aggressive": {"zh": "激进", "horizon_zh": "1-6 个月", "tag": "高动量 / 高弹性", "order": 5},
+    "long_term": {"en": "Long-term", "zh": "长线", "horizon_en": "6-12 months", "horizon_zh": "6-12 个月", "tag_en": "trend / low-vol", "tag_zh": "趋势 / 低波动", "order": 1},
+    "swing": {"en": "Swing", "zh": "中线 · 波段", "horizon_en": "1-3 months", "horizon_zh": "1-3 个月", "tag_en": "trend / reversal", "tag_zh": "趋势 / 反转", "order": 2},
+    "short_term": {"en": "Short-term", "zh": "短线", "horizon_en": "1-4 weeks", "horizon_zh": "1-4 周", "tag_en": "reversal / short trend", "tag_zh": "反转 / 短趋势", "order": 3},
+    "defensive": {"en": "Defensive", "zh": "防守", "horizon_en": "3-12 months", "horizon_zh": "3-12 个月", "tag_en": "low-vol first", "tag_zh": "低波动优先", "order": 4},
+    "aggressive": {"en": "Aggressive", "zh": "激进", "horizon_en": "1-6 months", "horizon_zh": "1-6 个月", "tag_en": "high momentum / beta", "tag_zh": "高动量 / 高弹性", "order": 5},
 }
 
-_Z_LABELS = {
-    "momentum_12_1_z": "12-1动量",
-    "trend_20_50_z": "20/50趋势",
-    "reversal_1m_z": "1月反转",
-    "low_volatility_z": "低波动",
-    "ml_rank_z": "ML排名",
+_Z_LABELS: dict[str, tuple[str, str]] = {
+    "momentum_12_1_z": ("12-1 momentum", "12-1动量"),
+    "trend_20_50_z": ("20/50 trend", "20/50趋势"),
+    "reversal_1m_z": ("1M reversal", "1月反转"),
+    "low_volatility_z": ("low vol", "低波动"),
+    "ml_rank_z": ("ML rank", "ML排名"),
 }
+
+
+def _z_label(column: str, lang: str) -> str:
+    pair = _Z_LABELS.get(column)
+    return tr(*pair, lang) if pair else column
 
 
 def build_market_report(config: AppConfig) -> dict[str, Any]:
     """Build the full daily market intelligence report payload."""
     mi = config.market_intel
+    lang = normalize_language(config.language)
     generated_at = datetime.now(UTC).isoformat()
     report: dict[str, Any] = {
         "generated_at": generated_at,
+        "language": lang,
         "as_of_date": None,
         "data_status": "unavailable",
         "universe_size": len(config.data.universe),
@@ -79,7 +95,7 @@ def build_market_report(config: AppConfig) -> dict[str, Any]:
         "llm_metadata": {"status": "skipped"},
         "warnings": [],
         "sources": {"news_feeds": mi.news_feeds, "social_feeds": mi.social_feeds},
-        "disclaimer": DISCLAIMER,
+        "disclaimer": _disclaimer(lang),
     }
 
     prices: pd.DataFrame | None = None
@@ -91,13 +107,13 @@ def build_market_report(config: AppConfig) -> dict[str, Any]:
     analysis_symbols: list[str] = []
     if prices is not None and not prices.empty:
         report["data_status"] = "ok"
-        analysis = _price_analysis(prices, config.strategy.benchmark)
+        analysis = _price_analysis(prices, config.strategy.benchmark, lang)
         report["as_of_date"] = analysis["as_of_date"]
         report["market_overview"] = analysis["overview"]
         report["buy_candidates"] = analysis["buy_candidates"]
         report["high_risk"] = analysis["high_risk"]
         analysis_symbols = analysis["focus_symbols"]
-        report["quant_candidates"] = _quant_candidates(prices, config)
+        report["quant_candidates"] = _quant_candidates(prices, config, lang)
 
     # Market-wide financial media headlines.
     report["news"], news_errors = _collect_feeds(mi.news_feeds, mi.max_news_items, mi.request_timeout)
@@ -144,7 +160,7 @@ def write_market_report(report: dict[str, Any], output_dir: Path) -> dict[str, P
 # ---------------------------------------------------------------------------
 
 
-def _price_analysis(prices: pd.DataFrame, benchmark: str) -> dict[str, Any]:
+def _price_analysis(prices: pd.DataFrame, benchmark: str, lang: str = "en") -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     as_of = pd.to_datetime(prices["date"]).max()
     for symbol, group in prices.groupby("symbol", sort=False):
@@ -184,8 +200,8 @@ def _price_analysis(prices: pd.DataFrame, benchmark: str) -> dict[str, Any]:
 
     frame = pd.DataFrame(rows)
     overview = _market_overview(frame, benchmark)
-    buy_candidates = _rank_buy_candidates(frame)
-    high_risk = _rank_high_risk(frame)
+    buy_candidates = _rank_buy_candidates(frame, lang)
+    high_risk = _rank_high_risk(frame, lang)
     focus = []
     for item in (*buy_candidates, *high_risk):
         if item["symbol"] not in focus:
@@ -220,7 +236,7 @@ def _market_overview(frame: pd.DataFrame, benchmark: str) -> dict[str, Any]:
     return overview
 
 
-def _rank_buy_candidates(frame: pd.DataFrame, limit: int = 8) -> list[dict[str, Any]]:
+def _rank_buy_candidates(frame: pd.DataFrame, lang: str = "en", limit: int = 8) -> list[dict[str, Any]]:
     if frame.empty:
         return []
     df = frame.dropna(subset=["ret_21d", "vol_annual"]).copy()
@@ -248,13 +264,13 @@ def _rank_buy_candidates(frame: pd.DataFrame, limit: int = 8) -> list[dict[str, 
                 "ret_21d_pct": round(float(row["ret_21d"]) * 100, 2),
                 "ret_5d_pct": round(float(row["ret_5d"]) * 100, 2),
                 "vol_annual_pct": round(float(row["vol_annual"]) * 100, 1),
-                "reason": _favorable_reason(row),
+                "reason": _favorable_reason(row, lang),
             }
         )
     return out
 
 
-def _rank_high_risk(frame: pd.DataFrame, limit: int = 8) -> list[dict[str, Any]]:
+def _rank_high_risk(frame: pd.DataFrame, lang: str = "en", limit: int = 8) -> list[dict[str, Any]]:
     if frame.empty:
         return []
     df = frame.dropna(subset=["vol_annual"]).copy()
@@ -282,35 +298,57 @@ def _rank_high_risk(frame: pd.DataFrame, limit: int = 8) -> list[dict[str, Any]]
                 "vol_annual_pct": round(float(row["vol_annual"]) * 100, 1),
                 "max_drawdown_252_pct": round(float(row["max_drawdown_252"]) * 100, 1),
                 "dist_from_high_pct": round(float(row["dist_from_high"]) * 100, 1),
-                "reason": _risk_reason(row),
+                "reason": _risk_reason(row, lang),
             }
         )
     return out
 
 
-def _favorable_reason(row: pd.Series) -> str:
+def _favorable_reason(row: pd.Series, lang: str = "en") -> str:
+    sep = tr("; ", "；", lang)
     parts = []
     if row["trend_up"]:
-        parts.append("20日均线在50日均线上方（趋势向上）")
-    parts.append(f"近1月{_signed(row['ret_21d'])}")
-    parts.append(f"年化波动约{float(row['vol_annual']) * 100:.0f}%（相对可控）")
+        parts.append(tr("20-day MA above the 50-day (uptrend)", "20日均线在50日均线上方（趋势向上）", lang))
+    parts.append(tr(f"1M {_signed(row['ret_21d'])}", f"近1月{_signed(row['ret_21d'])}", lang))
+    parts.append(tr(
+        f"annualized vol ~{float(row['vol_annual']) * 100:.0f}% (relatively contained)",
+        f"年化波动约{float(row['vol_annual']) * 100:.0f}%（相对可控）",
+        lang,
+    ))
     if row["dist_from_high"] > -0.05:
-        parts.append("接近52周高点附近")
-    return "；".join(parts)
+        parts.append(tr("near the 52-week high", "接近52周高点附近", lang))
+    return sep.join(parts)
 
 
-def _risk_reason(row: pd.Series) -> str:
-    parts = [f"年化波动约{float(row['vol_annual']) * 100:.0f}%（偏高）"]
+def _risk_reason(row: pd.Series, lang: str = "en") -> str:
+    sep = tr("; ", "；", lang)
+    parts = [tr(
+        f"annualized vol ~{float(row['vol_annual']) * 100:.0f}% (elevated)",
+        f"年化波动约{float(row['vol_annual']) * 100:.0f}%（偏高）",
+        lang,
+    )]
     if row["max_drawdown_252"] <= -0.20:
-        parts.append(f"近一年最大回撤{float(row['max_drawdown_252']) * 100:.0f}%")
+        parts.append(tr(
+            f"1Y max drawdown {float(row['max_drawdown_252']) * 100:.0f}%",
+            f"近一年最大回撤{float(row['max_drawdown_252']) * 100:.0f}%",
+            lang,
+        ))
     if pd.notna(row["ret_5d"]) and row["ret_5d"] <= -0.08:
-        parts.append(f"近5日急跌{float(row['ret_5d']) * 100:.0f}%")
+        parts.append(tr(
+            f"sharp 5-day drop {float(row['ret_5d']) * 100:.0f}%",
+            f"近5日急跌{float(row['ret_5d']) * 100:.0f}%",
+            lang,
+        ))
     if row["dist_from_high"] <= -0.25:
-        parts.append(f"距52周高点{float(row['dist_from_high']) * 100:.0f}%")
-    return "；".join(parts)
+        parts.append(tr(
+            f"{float(row['dist_from_high']) * 100:.0f}% from 52-week high",
+            f"距52周高点{float(row['dist_from_high']) * 100:.0f}%",
+            lang,
+        ))
+    return sep.join(parts)
 
 
-def _quant_candidates(prices: pd.DataFrame, config: AppConfig) -> dict[str, Any]:
+def _quant_candidates(prices: pd.DataFrame, config: AppConfig, lang: str = "en") -> dict[str, Any]:
     """Latest cross-sectional quant ranking per research profile."""
     try:
         signals = build_signals(prices, config.strategy.signal_weights)
@@ -349,33 +387,33 @@ def _quant_candidates(prices: pd.DataFrame, config: AppConfig) -> dict[str, Any]
                     "score": round(score, 3),
                     "strength": strength,
                     "last_price": round(float(r["adj_close"]), 2) if pd.notna(r.get("adj_close")) else None,
-                    "reason": _quant_reason(r, spec["weights"]),
+                    "reason": _quant_reason(r, spec["weights"], lang),
                 }
             )
         out[profile] = {
-            "label": spec["label"],
+            "label": tr(disp.get("en", spec["label"]), disp.get("zh", spec["label"]), lang),
             "label_zh": disp.get("zh", spec["label"]),
-            "horizon": spec["horizon"],
-            "horizon_zh": disp.get("horizon_zh", spec["horizon"]),
-            "tag": disp.get("tag", ""),
+            "horizon": tr(disp.get("horizon_en", spec["horizon"]), disp.get("horizon_zh", spec["horizon"]), lang),
+            "tag": tr(disp.get("tag_en", ""), disp.get("tag_zh", ""), lang),
             "order": disp.get("order", 99),
             "symbols": symbols,
         }
     return dict(sorted(out.items(), key=lambda kv: kv[1].get("order", 99)))
 
 
-def _quant_reason(row: pd.Series, weights: dict[str, float]) -> str:
+def _quant_reason(row: pd.Series, weights: dict[str, float], lang: str = "en") -> str:
     contributions = []
     for column, weight in weights.items():
         value = row.get(column)
         if value is None or pd.isna(value):
             continue
-        contributions.append((abs(float(value) * weight), _Z_LABELS.get(column, column), float(value)))
+        contributions.append((abs(float(value) * weight), _z_label(column, lang), float(value)))
     contributions.sort(reverse=True)
     top = contributions[:2]
     if not top:
-        return "综合横截面信号排名"
-    return "、".join(f"{label} z={value:+.1f}" for _, label, value in top)
+        return tr("composite cross-sectional ranking", "综合横截面信号排名", lang)
+    sep = tr(", ", "、", lang)
+    return sep.join(f"{label} z={value:+.1f}" for _, label, value in top)
 
 
 def _pct(series: pd.Series, periods: int) -> float | None:
@@ -575,54 +613,80 @@ def _parse_date(value: str) -> float | None:
 
 
 def _build_llm_prompt(report: dict[str, Any]) -> str:
-    lines = ["请基于以下数据，写一份今日美股研究简报（中文），明确区分相对值得关注的研究候选和高风险标的，并给出依据。", ""]
+    lang = normalize_language(report.get("language", "en"))
+    lines = [tr(
+        "Using the data below, write a daily US-equity research brief in English, clearly "
+        "separating relatively-strong research candidates from high-risk names, with reasoning.",
+        "请基于以下数据，写一份今日美股研究简报（中文），明确区分相对值得关注的研究候选和高风险标的，并给出依据。",
+        lang,
+    ), ""]
     overview = report.get("market_overview") or {}
     if overview:
-        lines.append(f"市场概览：{json.dumps(overview, ensure_ascii=False)}")
+        lines.append(f"{tr('Market overview', '市场概览', lang)}: {json.dumps(overview, ensure_ascii=False)}")
     if report.get("buy_candidates"):
-        lines.append(f"相对偏强候选（量化筛选）：{json.dumps(report['buy_candidates'], ensure_ascii=False)}")
+        lines.append(f"{tr('Relatively strong candidates (quant screen)', '相对偏强候选（量化筛选）', lang)}: {json.dumps(report['buy_candidates'], ensure_ascii=False)}")
     if report.get("high_risk"):
-        lines.append(f"高风险标的（量化筛选）：{json.dumps(report['high_risk'], ensure_ascii=False)}")
+        lines.append(f"{tr('High-risk names (quant screen)', '高风险标的（量化筛选）', lang)}: {json.dumps(report['high_risk'], ensure_ascii=False)}")
     if report.get("quant_candidates"):
-        lines.append(f"分类型量化候选：{json.dumps(report['quant_candidates'], ensure_ascii=False)}")
+        lines.append(f"{tr('Quant candidates by horizon', '分类型量化候选', lang)}: {json.dumps(report['quant_candidates'], ensure_ascii=False)}")
     headlines = [f"- [{n.get('source')}] {n.get('title')}" for n in report.get("news", [])[:15]]
     if headlines:
-        lines.append("最新财经媒体头条：")
+        lines.append(tr("Latest financial-media headlines:", "最新财经媒体头条：", lang))
         lines.extend(headlines)
     lines.append("")
-    lines.append("要求：用研究口吻，不要给出下单指令、仓位指令或实盘授权；对每个结论说明数据依据；最后加一句风险提示。")
+    lines.append(tr(
+        "Requirements: a research tone; no order/position instructions or live-trading authorization; "
+        "cite the data behind each conclusion; end with one risk note.",
+        "要求：用研究口吻，不要给出下单指令、仓位指令或实盘授权；对每个结论说明数据依据；最后加一句风险提示。",
+        lang,
+    ))
     return "\n".join(lines)
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    lines = ["# 今日美股研究简报", ""]
-    lines.append(f"- 生成时间（UTC）：{report.get('generated_at')}")
-    lines.append(f"- 数据截止日：{report.get('as_of_date') or '不可用'}")
-    lines.append(f"- 数据状态：{report.get('data_status')}")
+    lang = normalize_language(report.get("language", "en"))
+    na = tr("unavailable", "不可用", lang)
+    lines = [tr("# Daily US Equity Research Brief", "# 今日美股研究简报", lang), ""]
+    lines.append(f"- {tr('Generated (UTC)', '生成时间（UTC）', lang)}: {report.get('generated_at')}")
+    lines.append(f"- {tr('Data as of', '数据截止日', lang)}: {report.get('as_of_date') or na}")
+    lines.append(f"- {tr('Data status', '数据状态', lang)}: {report.get('data_status')}")
     lines.append("")
     lines.append(f"> {report.get('disclaimer')}")
     lines.append("")
 
     overview = report.get("market_overview") or {}
     if overview:
-        lines.append("## 市场概览")
+        lines.append(f"## {tr('Market overview', '市场概览', lang)}")
         if overview.get("benchmark"):
-            lines.append(
+            trend = tr("up", "向上", lang) if overview.get("benchmark_trend_up") else tr("down", "向下", lang)
+            lines.append(tr(
+                f"- Benchmark {overview['benchmark']}: 5D {overview.get('benchmark_ret_5d_pct')}%, "
+                f"1M {overview.get('benchmark_ret_21d_pct')}%, trend {trend}",
                 f"- 基准 {overview['benchmark']}：近5日 {overview.get('benchmark_ret_5d_pct')}%，"
-                f"近1月 {overview.get('benchmark_ret_21d_pct')}%，趋势{'向上' if overview.get('benchmark_trend_up') else '向下'}"
-            )
-        lines.append(f"- 样本数：{overview.get('symbols_analyzed')}，近5日上涨占比：{overview.get('breadth_5d_advancing_pct')}%")
-        lines.append(f"- 样本平均：近5日 {overview.get('avg_ret_5d_pct')}%，近1月 {overview.get('avg_ret_21d_pct')}%")
+                f"近1月 {overview.get('benchmark_ret_21d_pct')}%，趋势{trend}",
+                lang,
+            ))
+        lines.append(tr(
+            f"- Sample: {overview.get('symbols_analyzed')}, 5D advancing: {overview.get('breadth_5d_advancing_pct')}%",
+            f"- 样本数：{overview.get('symbols_analyzed')}，近5日上涨占比：{overview.get('breadth_5d_advancing_pct')}%",
+            lang,
+        ))
+        lines.append(tr(
+            f"- Sample avg: 5D {overview.get('avg_ret_5d_pct')}%, 1M {overview.get('avg_ret_21d_pct')}%",
+            f"- 样本平均：近5日 {overview.get('avg_ret_5d_pct')}%，近1月 {overview.get('avg_ret_21d_pct')}%",
+            lang,
+        ))
         lines.append("")
 
     if report.get("llm_narrative"):
-        lines.append("## AI 综合分析")
+        lines.append(f"## {tr('AI synthesis', 'AI 综合分析', lang)}")
         lines.append(report["llm_narrative"])
         lines.append("")
 
     if report.get("buy_candidates"):
-        lines.append("## 相对值得关注（研究候选）")
-        lines.append("| 代码 | 最新价 | 近1月 | 近5日 | 年化波动 | 依据 |")
+        lines.append(f"## {tr('Worth watching (research candidates)', '相对值得关注（研究候选）', lang)}")
+        lines.append("| " + " | ".join(tr(
+            "Symbol|Last|1M|5D|Ann. vol|Reason", "代码|最新价|近1月|近5日|年化波动|依据", lang).split("|")) + " |")
         lines.append("| --- | --- | --- | --- | --- | --- |")
         for c in report["buy_candidates"]:
             lines.append(
@@ -632,8 +696,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.append("")
 
     if report.get("high_risk"):
-        lines.append("## 高风险标的（谨慎）")
-        lines.append("| 代码 | 最新价 | 近5日 | 年化波动 | 近一年最大回撤 | 依据 |")
+        lines.append(f"## {tr('High-risk names (caution)', '高风险标的（谨慎）', lang)}")
+        lines.append("| " + " | ".join(tr(
+            "Symbol|Last|5D|Ann. vol|1Y max DD|Reason", "代码|最新价|近5日|年化波动|近一年最大回撤|依据", lang).split("|")) + " |")
         lines.append("| --- | --- | --- | --- | --- | --- |")
         for c in report["high_risk"]:
             lines.append(
@@ -644,16 +709,16 @@ def render_markdown(report: dict[str, Any]) -> str:
 
     quant = report.get("quant_candidates") or {}
     if quant:
-        lines.append("## 按持有周期的量化推荐")
+        lines.append(f"## {tr('Quant picks by holding horizon', '按持有周期的量化推荐', lang)}")
         for profile, data in quant.items():
-            lines.append(f"### {data.get('label_zh', profile)}（{data.get('horizon_zh', '')}）")
+            lines.append(f"### {data.get('label', profile)}（{data.get('horizon', '')}）")
             for s in data.get("symbols", []):
                 price = f"${s['last_price']}" if s.get("last_price") is not None else "—"
-                lines.append(f"- {s['symbol']}（{price}，score {s['score']}）：{s.get('reason', '')}")
+                lines.append(f"- {s['symbol']}（{price}, score {s['score']}）: {s.get('reason', '')}")
             lines.append("")
 
     if report.get("news"):
-        lines.append("## 最新财经媒体头条")
+        lines.append(f"## {tr('Latest financial-media headlines', '最新财经媒体头条', lang)}")
         for n in report["news"][:20]:
             published = f" — {n['published']}" if n.get("published") else ""
             link = f"（{n['link']}）" if n.get("link") else ""
@@ -662,7 +727,7 @@ def render_markdown(report: dict[str, Any]) -> str:
 
     company_news = report.get("company_news") or {}
     if company_news:
-        lines.append("## 重点个股资讯")
+        lines.append(f"## {tr('Per-company news', '重点个股资讯', lang)}")
         for symbol, items in company_news.items():
             lines.append(f"### {symbol}")
             for n in items:
@@ -671,13 +736,13 @@ def render_markdown(report: dict[str, Any]) -> str:
             lines.append("")
 
     if report.get("social_enabled") and report.get("social"):
-        lines.append("## 社交平台观点（实验）")
+        lines.append(f"## {tr('Social commentary (experimental)', '社交平台观点（实验）', lang)}")
         for n in report["social"][:15]:
             lines.append(f"- [{n.get('source')}] {n.get('title')} {n.get('link', '')}")
         lines.append("")
 
     if report.get("warnings"):
-        lines.append("## 说明")
+        lines.append(f"## {tr('Notes', '说明', lang)}")
         for warning in report["warnings"]:
             lines.append(f"- {warning}")
         lines.append("")
@@ -814,48 +879,51 @@ footer { margin-top: 64px; padding-top: 22px; border-top: 1px solid var(--line-2
 
 
 def render_html(report: dict[str, Any]) -> str:
+    lang = normalize_language(report.get("language", "en"))
     n = _SectionCounter()
     body = [
-        _html_overview(report, n),
-        _html_narrative(report, n),
-        _html_reco(report, n),
-        _html_table(report, "buy_candidates", "相对值得关注", n),
-        _html_table(report, "high_risk", "高风险标的", n),
-        _html_news(report, n),
-        _html_company(report, n),
-        _html_social(report, n),
-        _html_notes(report, n),
+        _html_overview(report, n, lang),
+        _html_narrative(report, n, lang),
+        _html_reco(report, n, lang),
+        _html_table(report, "buy_candidates", tr("Worth watching", "相对值得关注", lang), n, lang),
+        _html_table(report, "high_risk", tr("High-risk names", "高风险标的", lang), n, lang),
+        _html_news(report, n, lang),
+        _html_company(report, n, lang),
+        _html_social(report, n, lang),
+        _html_notes(report, n, lang),
     ]
     sections = "\n".join(block for block in body if block)
     status = str(report.get("data_status"))
     status_cls = "ok" if status == "ok" else "bad"
     overview = report.get("market_overview") or {}
     sample_count = overview.get("symbols_analyzed", report.get("universe_size", 0))
+    na = tr("unavailable", "不可用", lang)
+    title_main = tr("Daily US Equity Research Brief", "今日美股研究简报", lang)
     return f"""<!doctype html>
-<html lang="zh-CN">
+<html lang="{'zh-CN' if lang == 'zh' else 'en'}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>今日美股研究简报</title>
+<title>{title_main}</title>
 {_FONT_LINK}
 <style>{_REPORT_CSS}</style>
 </head>
 <body>
 <div class="wrap">
 <header>
-  <div class="kicker">Daily US Equity Briefing · 美股每日研究</div>
-  <h1 class="title">今日美股研究简报<span class="en">A quantitative reading of today's US market</span></h1>
+  <div class="kicker">Daily US Equity Briefing · {tr('US market research', '美股每日研究', lang)}</div>
+  <h1 class="title">{title_main}<span class="en">A quantitative reading of today's US market</span></h1>
   <div class="metabar">
-    <span class="pill">数据截止 <b>{_esc(report.get('as_of_date') or '不可用')}</b></span>
-    <span class="pill {status_cls}">状态 <b>{_esc(status)}</b></span>
-    <span class="pill">生成 (UTC) <b>{_esc(str(report.get('generated_at'))[:19])}</b></span>
-    <span class="pill">样本 <b>{_esc(sample_count)}</b></span>
+    <span class="pill">{tr('Data as of', '数据截止', lang)} <b>{_esc(report.get('as_of_date') or na)}</b></span>
+    <span class="pill {status_cls}">{tr('Status', '状态', lang)} <b>{_esc(status)}</b></span>
+    <span class="pill">{tr('Generated', '生成', lang)} (UTC) <b>{_esc(str(report.get('generated_at'))[:19])}</b></span>
+    <span class="pill">{tr('Sample', '样本', lang)} <b>{_esc(sample_count)}</b></span>
   </div>
 </header>
 <div class="ribbon">{_esc(report.get('disclaimer', ''))}</div>
 {sections}
 <footer>
-  <span>QUANT.AI · RESEARCH ONLY — 不构成投资建议</span>
+  <span>QUANT.AI · RESEARCH ONLY — {tr('not investment advice', '不构成投资建议', lang)}</span>
   <span>generated {_esc(str(report.get('generated_at'))[:19])} UTC</span>
 </footer>
 </div>
@@ -893,33 +961,33 @@ def _delta(value: Any, suffix: str = "%") -> str:
     return f'<span class="{cls}">{num:+.2f}{suffix}</span>'
 
 
-def _html_overview(report: dict[str, Any], n: _SectionCounter) -> str:
+def _html_overview(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
     overview = report.get("market_overview") or {}
     if not overview:
         return ""
     tiles: list[tuple[str, str]] = []
     if overview.get("benchmark"):
-        tiles.append((f"基准 {overview['benchmark']} · 近1月", _delta(overview.get("benchmark_ret_21d_pct"))))
-        tiles.append((f"{overview['benchmark']} · 近5日", _delta(overview.get("benchmark_ret_5d_pct"))))
-    tiles.append(("近5日上涨占比", f"{overview.get('breadth_5d_advancing_pct', '—')}%"))
-    tiles.append(("样本均值 · 近1月", _delta(overview.get("avg_ret_21d_pct"))))
-    tiles.append(("样本均值 · 近5日", _delta(overview.get("avg_ret_5d_pct"))))
-    tiles.append(("分析标的数", str(overview.get("symbols_analyzed", "—"))))
+        tiles.append((tr(f"Benchmark {overview['benchmark']} · 1M", f"基准 {overview['benchmark']} · 近1月", lang), _delta(overview.get("benchmark_ret_21d_pct"))))
+        tiles.append((f"{overview['benchmark']} · {tr('5D', '近5日', lang)}", _delta(overview.get("benchmark_ret_5d_pct"))))
+    tiles.append((tr("5D advancing", "近5日上涨占比", lang), f"{overview.get('breadth_5d_advancing_pct', '—')}%"))
+    tiles.append((tr("Sample avg · 1M", "样本均值 · 近1月", lang), _delta(overview.get("avg_ret_21d_pct"))))
+    tiles.append((tr("Sample avg · 5D", "样本均值 · 近5日", lang), _delta(overview.get("avg_ret_5d_pct"))))
+    tiles.append((tr("Names analyzed", "分析标的数", lang), str(overview.get("symbols_analyzed", "—"))))
     cells = "".join(
         f'<div class="tile"><div class="t-label">{_esc(label)}</div><div class="t-value">{value}</div></div>'
         for label, value in tiles
     )
-    return f'<section>{_sec_head(n.next(), "市场概览")}<div class="tiles">{cells}</div></section>'
+    return f'<section>{_sec_head(n.next(), tr("Market overview", "市场概览", lang))}<div class="tiles">{cells}</div></section>'
 
 
-def _html_narrative(report: dict[str, Any], n: _SectionCounter) -> str:
+def _html_narrative(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
     narrative = report.get("llm_narrative")
     if not narrative:
         return ""
-    return f'<section>{_sec_head(n.next(), "AI 综合分析", "model synthesis")}<div class="narrative">{_esc(narrative)}</div></section>'
+    return f'<section>{_sec_head(n.next(), tr("AI synthesis", "AI 综合分析", lang), "model synthesis")}<div class="narrative">{_esc(narrative)}</div></section>'
 
 
-def _html_reco(report: dict[str, Any], n: _SectionCounter) -> str:
+def _html_reco(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
     quant = report.get("quant_candidates") or {}
     if not quant:
         return ""
@@ -938,49 +1006,51 @@ def _html_reco(report: dict[str, Any], n: _SectionCounter) -> str:
         if not picks:
             continue
         columns.append(
-            f'<div class="reco"><div class="reco-top"><div class="reco-name">{_esc(data.get("label_zh"))}</div>'
-            f'<div class="reco-meta"><span class="chip">{_esc(data.get("horizon_zh"))}</span>'
+            f'<div class="reco"><div class="reco-top"><div class="reco-name">{_esc(data.get("label"))}</div>'
+            f'<div class="reco-meta"><span class="chip">{_esc(data.get("horizon"))}</span>'
             f'<span class="reco-tag">{_esc(data.get("tag", ""))}</span></div></div>{"".join(picks)}</div>'
         )
     if not columns:
         return ""
-    head = _sec_head(n.next(), "按持有周期的研究推荐", "长线 / 中线 / 短线 …")
+    head = _sec_head(n.next(), tr("Research picks by holding horizon", "按持有周期的研究推荐", lang), tr("long / mid / short …", "长线 / 中线 / 短线 …", lang))
     return f'<section>{head}<div class="reco-grid">{"".join(columns)}</div></section>'
 
 
-def _html_table(report: dict[str, Any], key: str, title: str, n: _SectionCounter) -> str:
+def _html_table(report: dict[str, Any], key: str, title: str, n: _SectionCounter, lang: str = "en") -> str:
     rows_data = report.get(key) or []
     if not rows_data:
         return ""
     if key == "buy_candidates":
-        head = "<tr><th>代码</th><th>最新价</th><th>近1月</th><th>近5日</th><th>年化波动</th><th>依据</th></tr>"
+        ths = tr("Symbol|Last|1M|5D|Ann. vol|Reason", "代码|最新价|近1月|近5日|年化波动|依据", lang).split("|")
+        head = "<tr>" + "".join(f"<th>{_esc(t)}</th>" for t in ths) + "</tr>"
         body = "".join(
             f'<tr><td class="sym">{_esc(c["symbol"])}</td><td class="num">{c["last_price"]}</td>'
             f'<td class="num">{_delta(c.get("ret_21d_pct"))}</td><td class="num">{_delta(c.get("ret_5d_pct"))}</td>'
             f'<td class="num muted">{c.get("vol_annual_pct")}%</td><td class="why-cell">{_esc(c.get("reason", ""))}</td></tr>'
             for c in rows_data
         )
-        cls, hint = "buy", "趋势向上 · 波动可控"
+        cls, hint = "buy", tr("uptrend · contained vol", "趋势向上 · 波动可控", lang)
     else:
-        head = "<tr><th>代码</th><th>最新价</th><th>近5日</th><th>年化波动</th><th>近一年最大回撤</th><th>依据</th></tr>"
+        ths = tr("Symbol|Last|5D|Ann. vol|1Y max DD|Reason", "代码|最新价|近5日|年化波动|近一年最大回撤|依据", lang).split("|")
+        head = "<tr>" + "".join(f"<th>{_esc(t)}</th>" for t in ths) + "</tr>"
         body = "".join(
             f'<tr><td class="sym">{_esc(c["symbol"])}</td><td class="num">{c["last_price"]}</td>'
             f'<td class="num">{_delta(c.get("ret_5d_pct"))}</td><td class="num neg">{c.get("vol_annual_pct")}%</td>'
             f'<td class="num neg">{c.get("max_drawdown_252_pct")}%</td><td class="why-cell">{_esc(c.get("reason", ""))}</td></tr>'
             for c in rows_data
         )
-        cls, hint = "risk", "高波动 · 深回撤 · 急跌"
+        cls, hint = "risk", tr("high vol · deep drawdown · sharp drop", "高波动 · 深回撤 · 急跌", lang)
     return (
         f'<section>{_sec_head(n.next(), title, hint)}'
         f'<div class="panel"><table class="{cls}"><thead>{head}</thead><tbody>{body}</tbody></table></div></section>'
     )
 
 
-def _html_news(report: dict[str, Any], n: _SectionCounter) -> str:
+def _html_news(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
     news = report.get("news") or []
-    head = _sec_head(n.next(), "最新财经媒体头条", f"{len(news)} 条")
+    head = _sec_head(n.next(), tr("Latest financial-media headlines", "最新财经媒体头条", lang), tr(f"{len(news)} items", f"{len(news)} 条", lang))
     if not news:
-        return f'<section>{head}<div class="empty">本次未抓取到媒体新闻（可能为网络问题，详见“说明”）。</div></section>'
+        return f'<section>{head}<div class="empty">{tr("No media news fetched this run (possibly a network issue — see Notes).", "本次未抓取到媒体新闻（可能为网络问题，详见“说明”）。", lang)}</div></section>'
     items = []
     for item in news[:24]:
         title = _esc(item.get("title", ""))
@@ -994,7 +1064,7 @@ def _html_news(report: dict[str, Any], n: _SectionCounter) -> str:
     return f'<section>{head}<div class="news-list">{"".join(items)}</div></section>'
 
 
-def _html_company(report: dict[str, Any], n: _SectionCounter) -> str:
+def _html_company(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
     company = report.get("company_news") or {}
     if not company:
         return ""
@@ -1006,10 +1076,10 @@ def _html_company(report: dict[str, Any], n: _SectionCounter) -> str:
             for item in items
         )
         cards.append(f'<div class="co"><h3>{_esc(symbol)}</h3><ul>{lis}</ul></div>')
-    return f'<section>{_sec_head(n.next(), "重点个股资讯")}<div class="co-grid">{"".join(cards)}</div></section>'
+    return f'<section>{_sec_head(n.next(), tr("Per-company news", "重点个股资讯", lang))}<div class="co-grid">{"".join(cards)}</div></section>'
 
 
-def _html_social(report: dict[str, Any], n: _SectionCounter) -> str:
+def _html_social(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
     if not (report.get("social_enabled") and report.get("social")):
         return ""
     items = "".join(
@@ -1017,12 +1087,12 @@ def _html_social(report: dict[str, Any], n: _SectionCounter) -> str:
         f'<a href="{_esc(item.get("link", ""))}" target="_blank" rel="noopener">{_esc(item.get("title", ""))}</a></div>'
         for item in report["social"][:15]
     )
-    return f'<section>{_sec_head(n.next(), "社交平台观点", "实验")}<div class="news-list">{items}</div></section>'
+    return f'<section>{_sec_head(n.next(), tr("Social commentary", "社交平台观点", lang), tr("experimental", "实验", lang))}<div class="news-list">{items}</div></section>'
 
 
-def _html_notes(report: dict[str, Any], n: _SectionCounter) -> str:
+def _html_notes(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
     warnings = report.get("warnings") or []
     if not warnings:
         return ""
     items = "".join(f"<li>{_esc(w)}</li>" for w in warnings)
-    return f'<section>{_sec_head(n.next(), "说明")}<ul class="notes">{items}</ul></section>'
+    return f'<section>{_sec_head(n.next(), tr("Notes", "说明", lang))}<ul class="notes">{items}</ul></section>'

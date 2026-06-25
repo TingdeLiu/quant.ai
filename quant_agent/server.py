@@ -498,7 +498,7 @@ def _handler_factory(
                 comment="Approved from local dashboard API.",
                 allow_submit=config.approvals.allow_broker_submit_after_approval,
             )
-            write_dashboard(report_dir, report_dir / "dashboard.html")
+            write_dashboard(report_dir, report_dir / "dashboard.html", config.language)
             audit_log.append(
                 "approve_paper_orders",
                 status="success",
@@ -517,7 +517,7 @@ def _handler_factory(
                 approver="dashboard",
                 comment="Rejected from local dashboard API.",
             )
-            write_dashboard(report_dir, report_dir / "dashboard.html")
+            write_dashboard(report_dir, report_dir / "dashboard.html", config.language)
             audit_log.append(
                 "reject_paper_orders",
                 status="success",
