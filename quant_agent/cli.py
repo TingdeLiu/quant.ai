@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import typer
@@ -16,14 +17,14 @@ from quant_agent.dashboard import write_dashboard
 from quant_agent.data import load_prices
 from quant_agent.data_quality import build_data_quality_report, write_data_quality_report
 from quant_agent.features import build_signals
+from quant_agent.i18n import normalize_language, tr
 from quant_agent.market_intel import build_market_report, write_market_report
 from quant_agent.ml import apply_ml_ranking_signal
 from quant_agent.onboarding import (
-    DISCOVERY_STATUS_MESSAGES,
-    RISK_TO_PROFILE,
     UserProfile,
     build_personal_universe,
     catalog_sectors,
+    discovery_status_message,
     load_catalog,
     load_profile,
     read_universe_symbols,
@@ -44,12 +45,25 @@ def main() -> None:
 
 
 _RATING_COLORS = {
-    "强烈看多": "bold green",
-    "偏多": "green",
-    "中性": "yellow",
-    "偏空": "red",
-    "强烈看空": "bold red",
+    "Strong Buy": "bold green", "强烈看多": "bold green",
+    "Mildly Bullish": "green", "偏多": "green",
+    "Neutral": "yellow", "中性": "yellow",
+    "Mildly Bearish": "red", "偏空": "red",
+    "Strong Sell": "bold red", "强烈看空": "bold red",
 }
+
+
+def _resolve_language(lang: str | None) -> str:
+    """语言优先级：--lang 显式 > quant-ai init 存的偏好(configs/profile.json) > 英文。"""
+    if lang:
+        return normalize_language(lang)
+    profile = Path("configs/profile.json")
+    if profile.exists():
+        try:
+            return normalize_language(json.loads(profile.read_text(encoding="utf-8")).get("language"))
+        except Exception:  # noqa: BLE001 - 读不到就用默认
+            pass
+    return "en"
 
 
 @app.command("analyze")
@@ -58,55 +72,69 @@ def analyze_command(
     file: Path | None = typer.Option(None, "--file", "-f", help="自选股文件：每行一个或逗号分隔，# 后为注释"),
     watchlist: bool = typer.Option(False, "--watchlist", "-w", help="分析个性化股票池（quant-ai init 生成的 my_universe.csv）"),
     watchlist_path: Path = typer.Option(Path("configs/my_universe.csv"), "--watchlist-path", help="个性化股票池 CSV 路径"),
+    lang: str | None = typer.Option(None, "--lang", "-l", help="output language en/zh (default en; uses your init choice if set)"),
     config: Path | None = typer.Option(None, "--config", "-c", help="可选配置文件，用于启用 LLM 综述"),
     output_dir: Path | None = typer.Option(None, "--output-dir", "-o", help="可选：把分析写入目录（json+md）"),
     chart: bool = typer.Option(False, "--chart", help="额外导出价格+均线+RSI 的 PNG 图（需配合 --output-dir）"),
     json_only: bool = typer.Option(False, "--json", help="只输出 JSON，便于脚本调用"),
 ) -> None:
     """快速分析一只或多只美股，给出评级、理由和关键价位（零配置，秒级）。"""
+    language = _resolve_language(lang)
     requested = list(symbols or [])
     if file is not None:
         requested.extend(read_symbols_file(file))
     if watchlist:
         if not watchlist_path.exists():
-            console.print(f"[red]未找到个性化股票池 {watchlist_path}，请先运行 quant-ai init。[/red]")
+            console.print("[red]" + tr(
+                f"Personalized watchlist {watchlist_path} not found — run quant-ai init first.",
+                f"未找到个性化股票池 {watchlist_path}，请先运行 quant-ai init。",
+                language,
+            ) + "[/red]")
             raise typer.Exit(code=2)
         requested.extend(read_universe_symbols(watchlist_path))
     if not requested:
-        console.print("[red]请提供至少一个股票代码，或用 --file / --watchlist 指定股票来源。[/red]")
+        console.print("[red]" + tr(
+            "Provide at least one ticker, or use --file / --watchlist.",
+            "请提供至少一个股票代码，或用 --file / --watchlist 指定股票来源。",
+            language,
+        ) + "[/red]")
         raise typer.Exit(code=2)
 
     llm_config = load_config(config).llm if config else None
-    payload = analyze_symbols(requested, llm_config=llm_config)
+    payload = analyze_symbols(requested, llm_config=llm_config, language=language)
 
     if json_only:
-        import json as _json
-
         serializable = {k: v for k, v in payload.items() if k != "_objects"}
-        console.print_json(_json.dumps(serializable, ensure_ascii=False, default=str))
+        console.print_json(json.dumps(serializable, ensure_ascii=False, default=str))
         return
 
     for result in payload["_objects"]:
         if not result.ok:
-            console.print(Panel(f"[red]{result.error}[/red]", title=f"{result.symbol} 无法分析", border_style="red"))
+            title = f"{result.symbol} {tr('— unable to analyze', '无法分析', language)}"
+            console.print(Panel(f"[red]{result.error}[/red]", title=title, border_style="red"))
             continue
-        _render_symbol(result)
+        _render_symbol(result, language)
 
     if payload.get("narrative"):
-        console.print(Panel(payload["narrative"], title="AI 综合解读", border_style="cyan"))
+        console.print(Panel(payload["narrative"], title=tr("AI summary", "AI 综合解读", language), border_style="cyan"))
 
     console.print(f"[dim]{payload['disclaimer']}[/dim]")
 
     if output_dir is not None:
         paths = write_analysis(payload, output_dir, with_charts=chart)
-        console.print(f"[green]已写入[/green] {paths['markdown']}")
+        console.print(f"[green]{tr('Written', '已写入', language)}[/green] {paths['markdown']}")
         for png in paths.get("charts", []):
-            console.print(f"[green]图表[/green] {png}")
+            console.print(f"[green]{tr('Chart', '图表', language)}[/green] {png}")
     elif chart:
-        console.print("[yellow]--chart 需要配合 --output-dir 使用（图表会写入该目录）。[/yellow]")
+        console.print("[yellow]" + tr(
+            "--chart needs --output-dir (the chart is written there).",
+            "--chart 需要配合 --output-dir 使用（图表会写入该目录）。",
+            language,
+        ) + "[/yellow]")
 
 
-def _render_symbol(result) -> None:
+def _render_symbol(result, language: str = "en") -> None:
+    lang = normalize_language(language)
     color = _RATING_COLORS.get(result.rating, "white")
     m = result.metrics
 
@@ -116,17 +144,34 @@ def _render_symbol(result) -> None:
     table = Table.grid(padding=(0, 2))
     table.add_column(justify="right", style="dim")
     table.add_column()
-    table.add_row("最新价", f"{result.price}  （{result.data_date}）")
-    table.add_row("区间涨跌", f"1月 {pct(m['ret_1m'])}  ·  3月 {pct(m['ret_3m'])}  ·  6月 {pct(m['ret_6m'])}  ·  1年 {pct(m['ret_1y'])}")
-    table.add_row("RSI / 波动", f"RSI {m['rsi_14']}  ·  年化波动 {pct(m['vol_annual'])}")
-    table.add_row("均线", f"MA20 {m['ma20']}  ·  MA50 {m['ma50']}  ·  MA200 {m['ma200']}")
-    table.add_row("解读", result.note)
+    table.add_row(tr("Last", "最新价", lang), f"{result.price}  ({result.data_date})")
+    table.add_row(
+        tr("Returns", "区间涨跌", lang),
+        tr(
+            f"1M {pct(m['ret_1m'])}  ·  3M {pct(m['ret_3m'])}  ·  6M {pct(m['ret_6m'])}  ·  1Y {pct(m['ret_1y'])}",
+            f"1月 {pct(m['ret_1m'])}  ·  3月 {pct(m['ret_3m'])}  ·  6月 {pct(m['ret_6m'])}  ·  1年 {pct(m['ret_1y'])}",
+            lang,
+        ),
+    )
+    table.add_row(
+        tr("RSI / Vol", "RSI / 波动", lang),
+        tr(f"RSI {m['rsi_14']}  ·  ann. vol {pct(m['vol_annual'])}", f"RSI {m['rsi_14']}  ·  年化波动 {pct(m['vol_annual'])}", lang),
+    )
+    table.add_row(tr("MAs", "均线", lang), f"MA20 {m['ma20']}  ·  MA50 {m['ma50']}  ·  MA200 {m['ma200']}")
+    table.add_row(tr("Note", "解读", lang), result.note)
     if result.reasons:
-        table.add_row("依据", "\n".join(f"· {r}" for r in result.reasons))
+        table.add_row(tr("Reasons", "依据", lang), "\n".join(f"· {r}" for r in result.reasons))
     levels = result.levels
-    table.add_row("参考关注位", f"支撑 {levels.get('reference_support')}  ·  参考止损 {levels.get('reference_stop')}")
+    table.add_row(
+        tr("Key levels", "参考关注位", lang),
+        tr(
+            f"support {levels.get('reference_support')}  ·  stop {levels.get('reference_stop')}",
+            f"支撑 {levels.get('reference_support')}  ·  参考止损 {levels.get('reference_stop')}",
+            lang,
+        ),
+    )
 
-    title = f"[{color}]{result.symbol} — {result.rating}[/{color}]  （信心：{result.confidence}）"
+    title = f"[{color}]{result.symbol} — {result.rating}[/{color}]  ({tr('confidence', '信心', lang)}: {result.confidence})"
     console.print(Panel(table, title=title, border_style=color))
 
 
@@ -300,20 +345,40 @@ def serve_dashboard_command(
     run_dashboard_server(config, host=host, port=port)
 
 
-_SOURCE_LABELS = {"picked": ("自选公司", "bold cyan"), "sector": ("板块", "cyan"), "discovery": ("发现推荐", "magenta")}
+_SOURCE_META = {
+    "picked": (("Picked", "自选公司"), "bold cyan"),
+    "sector": (("Sector", "板块"), "cyan"),
+    "discovery": (("Discovery", "发现推荐"), "magenta"),
+}
+_RISK_OPTIONS = [
+    ("long_term", "Long-term", "长线"),
+    ("swing", "Swing", "波段"),
+    ("short_term", "Short-term", "短线"),
+    ("defensive", "Defensive", "防守"),
+    ("aggressive", "Aggressive", "激进"),
+]
 
 
-def _prompt_sectors(catalog) -> list[str]:
+def _source_label(source: str, lang: str) -> tuple[str, str]:
+    (en, zh), color = _SOURCE_META.get(source, ((source, source), "white"))
+    return tr(en, zh, lang), color
+
+
+def _prompt_language() -> str:
+    return normalize_language(Prompt.ask("Language / 语言", choices=["en", "zh"], default="en"))
+
+
+def _prompt_sectors(catalog, lang: str) -> list[str]:
     sectors = catalog_sectors(catalog)
-    table = Table(title="可选板块", show_header=True, header_style="bold")
+    table = Table(title=tr("Sectors", "可选板块", lang), show_header=True, header_style="bold")
     table.add_column("#", justify="right")
-    table.add_column("板块")
-    table.add_column("代表股（示例）")
+    table.add_column(tr("Sector", "板块", lang))
+    table.add_column(tr("Examples", "代表股（示例）", lang))
     for i, sector in enumerate(sectors, 1):
         members = catalog[catalog["sector"] == sector]["symbol"].head(6).tolist()
         table.add_row(str(i), sector, ", ".join(members))
     console.print(table)
-    raw = Prompt.ask("输入感兴趣板块的编号（逗号分隔，可留空）", default="")
+    raw = Prompt.ask(tr("Sector numbers you care about (comma-separated, optional)", "输入感兴趣板块的编号（逗号分隔，可留空）", lang), default="")
     chosen: list[str] = []
     for token in raw.replace("，", ",").split(","):
         token = token.strip()
@@ -324,46 +389,54 @@ def _prompt_sectors(catalog) -> list[str]:
     return chosen
 
 
-def _prompt_risk() -> str:
-    options = list(RISK_TO_PROFILE.keys())
-    console.print(f"[dim]风险偏好可选：{' / '.join(options)}[/dim]")
-    return Prompt.ask("选择风险偏好", choices=options, default=options[0])
+def _prompt_risk(lang: str) -> str:
+    labels = [f"{i + 1}.{tr(en, zh, lang)}" for i, (_, en, zh) in enumerate(_RISK_OPTIONS)]
+    console.print(f"[dim]{tr('Risk preference', '风险偏好', lang)}: {' / '.join(labels)}[/dim]")
+    raw = Prompt.ask(tr("Choose risk (number)", "选择风险偏好（编号）", lang), default="1")
+    idx = int(raw) - 1 if raw.strip().isdigit() and 1 <= int(raw) <= len(_RISK_OPTIONS) else 0
+    return _RISK_OPTIONS[idx][0]
 
 
-def _render_universe_preview(frame) -> None:
+def _render_universe_preview(frame, lang: str) -> None:
     if frame.empty:
-        console.print("[yellow]没有任何标的被选中。[/yellow]")
+        console.print("[yellow]" + tr("Nothing was selected.", "没有任何标的被选中。", lang) + "[/yellow]")
         return
-    table = Table(title=f"个性化股票池预览（共 {len(frame)} 只）", show_header=True, header_style="bold")
-    table.add_column("代码")
-    table.add_column("名称")
-    table.add_column("板块")
-    table.add_column("来源")
+    table = Table(
+        title=tr(f"Personalized watchlist preview ({len(frame)} names)", f"个性化股票池预览（共 {len(frame)} 只）", lang),
+        show_header=True,
+        header_style="bold",
+    )
+    table.add_column(tr("Symbol", "代码", lang))
+    table.add_column(tr("Name", "名称", lang))
+    table.add_column(tr("Sector", "板块", lang))
+    table.add_column(tr("Source", "来源", lang))
     for _, row in frame.iterrows():
-        label, color = _SOURCE_LABELS.get(row["source"], (row["source"], "white"))
+        label, color = _source_label(row["source"], lang)
         table.add_row(row["symbol"], row["name"], row["sector"], f"[{color}]{label}[/{color}]")
     console.print(table)
     counts = frame["source"].value_counts().to_dict()
     summary = "  ·  ".join(
-        f"{_SOURCE_LABELS.get(src, (src, ''))[0]} {counts.get(src, 0)}"
+        f"{_source_label(src, lang)[0]} {counts.get(src, 0)}"
         for src in ("picked", "sector", "discovery")
         if counts.get(src)
     )
-    console.print(f"[dim]构成：{summary}[/dim]")
+    console.print(f"[dim]{tr('Composition', '构成', lang)}: {summary}[/dim]")
 
 
 def _write_and_report(frame, profile, configs_dir: Path, base_config: Path, status: str) -> None:
-    if status != "ok" and DISCOVERY_STATUS_MESSAGES.get(status):
-        console.print(f"[yellow]{DISCOVERY_STATUS_MESSAGES[status]}[/yellow]")
+    lang = normalize_language(profile.language)
+    msg = discovery_status_message(status, lang)
+    if msg:
+        console.print(f"[yellow]{msg}[/yellow]")
     paths = write_personal_universe(frame, profile, configs_dir, base_config)
-    console.print("[bold green]个性化股票池已生成[/bold green]")
-    console.print(f"[green]股票池[/green] {paths['universe']}")
-    console.print(f"[green]配置[/green] {paths['config']}")
-    console.print(f"[green]偏好[/green] {paths['profile']}")
-    console.print("\n下一步可以：")
-    console.print("  · [cyan]quant-ai analyze --watchlist[/cyan]   分析你的个性化股票池")
-    console.print(f"  · [cyan]quant-ai market-report --config {paths['config']}[/cyan]   生成每日市场简报")
-    console.print("  · [cyan]quant-ai refresh-universe[/cyan]   行情更新后刷新「发现池」推荐")
+    console.print("[bold green]" + tr("Personalized watchlist created", "个性化股票池已生成", lang) + "[/bold green]")
+    console.print(f"[green]{tr('Watchlist', '股票池', lang)}[/green] {paths['universe']}")
+    console.print(f"[green]{tr('Config', '配置', lang)}[/green] {paths['config']}")
+    console.print(f"[green]{tr('Profile', '偏好', lang)}[/green] {paths['profile']}")
+    console.print("\n" + tr("Next steps:", "下一步可以：", lang))
+    console.print(f"  · [cyan]quant-ai analyze --watchlist[/cyan]   {tr('analyze your watchlist', '分析你的个性化股票池', lang)}")
+    console.print(f"  · [cyan]quant-ai market-report --config {paths['config']}[/cyan]   {tr('daily market brief', '生成每日市场简报', lang)}")
+    console.print(f"  · [cyan]quant-ai refresh-universe[/cyan]   {tr('refresh discovery picks', '行情更新后刷新「发现池」推荐', lang)}")
 
 
 @app.command("init")
@@ -373,54 +446,64 @@ def init_command(
     base_config: Path = typer.Option(Path("configs/default.yaml"), "--base-config", help="继承的基础配置"),
     sectors: list[str] | None = typer.Option(None, "--sector", help="非交互：指定板块（可多次）"),
     tickers: list[str] | None = typer.Option(None, "--ticker", help="非交互：指定关注的股票代码（可多次/逗号分隔）"),
-    risk: str | None = typer.Option(None, "--risk", help="风险偏好：长线/波段/短线/防守/激进"),
+    risk: str | None = typer.Option(None, "--risk", help="risk: long_term/swing/short_term/defensive/aggressive"),
     benchmark: str = typer.Option("SPY", "--benchmark", help="基准代码"),
+    lang: str | None = typer.Option(None, "--lang", "-l", help="language en/zh (default en)"),
     non_interactive: bool = typer.Option(False, "--non-interactive", help="不弹问答，直接用上面的参数生成"),
     no_discovery: bool = typer.Option(False, "--no-discovery", help="跳过「发现池」（不下载行情，仅写自选部分）"),
 ) -> None:
-    """首次使用引导：问几个问题，生成 2/3 自选 + 1/3 发现的个性化股票池。"""
+    """First-run setup: a few questions build a 2/3 self-picked + 1/3 discovered watchlist."""
     if not catalog_path.exists():
-        console.print(f"[red]未找到候选目录 {catalog_path}。[/red]")
+        console.print(f"[red]Catalog not found: {catalog_path}[/red]")
         raise typer.Exit(code=2)
     catalog = load_catalog(catalog_path)
 
     if non_interactive:
+        language = normalize_language(lang)
         profile = UserProfile(
             sectors=list(sectors or []),
             tickers=_clean_symbols(list(tickers or [])),
-            risk=risk or "长线",
+            risk=risk or "long_term",
             benchmark=benchmark.upper(),
+            language=language,
         )
         if not profile.sectors and not profile.tickers:
-            console.print("[red]--non-interactive 模式至少需要 --sector 或 --ticker。[/red]")
+            console.print("[red]--non-interactive needs at least --sector or --ticker.[/red]")
             raise typer.Exit(code=2)
     else:
+        language = normalize_language(lang) if lang else _prompt_language()
         console.print(
             Panel(
-                "欢迎使用 quant.ai！回答几个问题，帮你搭一份个性化股票池：\n"
-                "2/3 来自你自选的公司和板块，1/3 由系统在全市场里挑你没选到的强势标的。",
-                title="首次使用引导",
+                tr(
+                    "Welcome to quant.ai! A few questions build a personalized watchlist:\n"
+                    "2/3 from companies and sectors you pick, 1/3 the engine discovers from the wider market.",
+                    "欢迎使用 quant.ai！回答几个问题，帮你搭一份个性化股票池：\n"
+                    "2/3 来自你自选的公司和板块，1/3 由系统在全市场里挑你没选到的强势标的。",
+                    language,
+                ),
+                title=tr("First-run setup", "首次使用引导", language),
                 border_style="cyan",
             )
         )
-        chosen_sectors = list(sectors) if sectors else _prompt_sectors(catalog)
-        raw_ticker_input = Prompt.ask("额外关注的股票代码（逗号分隔，可留空）", default="")
+        chosen_sectors = list(sectors) if sectors else _prompt_sectors(catalog, language)
+        raw_ticker_input = Prompt.ask(tr("Extra tickers to follow (comma-separated, optional)", "额外关注的股票代码（逗号分隔，可留空）", language), default="")
         chosen_tickers = _clean_symbols(list(tickers) if tickers else [raw_ticker_input])
-        chosen_risk = risk or _prompt_risk()
+        chosen_risk = risk or _prompt_risk(language)
         profile = UserProfile(
             sectors=chosen_sectors,
             tickers=chosen_tickers,
             risk=chosen_risk,
             benchmark=benchmark.upper(),
+            language=language,
         )
         if not profile.sectors and not profile.tickers:
-            console.print("[red]至少选择一个板块或输入一个股票代码。[/red]")
+            console.print("[red]" + tr("Pick at least one sector or enter one ticker.", "至少选择一个板块或输入一个股票代码。", language) + "[/red]")
             raise typer.Exit(code=2)
 
     if not no_discovery:
-        console.print("[dim]正在评估「发现池」（可能需要下载行情，请稍候）…[/dim]")
+        console.print("[dim]" + tr("Evaluating discovery picks (may download prices)…", "正在评估「发现池」（可能需要下载行情，请稍候）…", language) + "[/dim]")
     frame, status = build_personal_universe(profile, catalog, enable_discovery=not no_discovery)
-    _render_universe_preview(frame)
+    _render_universe_preview(frame, language)
     _write_and_report(frame, profile, configs_dir, base_config, status)
 
 
@@ -431,13 +514,13 @@ def refresh_universe_command(
     configs_dir: Path = typer.Option(Path("configs"), "--configs-dir"),
     base_config: Path = typer.Option(Path("configs/default.yaml"), "--base-config"),
 ) -> None:
-    """用已保存的偏好重新计算「发现池」1/3（市场会变），自选 2/3 不变。"""
+    """Recompute the 1/3 discovery picks from your saved profile (your 2/3 stays)."""
     if not profile_path.exists():
-        console.print(f"[red]未找到偏好文件 {profile_path}，请先运行 quant-ai init。[/red]")
+        console.print(f"[red]Profile not found: {profile_path} — run quant-ai init first.[/red]")
         raise typer.Exit(code=2)
     profile = load_profile(profile_path)
     catalog = load_catalog(catalog_path)
-    console.print("[dim]正在刷新「发现池」（下载/读取行情）…[/dim]")
+    console.print("[dim]" + tr("Refreshing discovery picks…", "正在刷新「发现池」…", normalize_language(profile.language)) + "[/dim]")
     frame, status = build_personal_universe(profile, catalog)
-    _render_universe_preview(frame)
+    _render_universe_preview(frame, normalize_language(profile.language))
     _write_and_report(frame, profile, configs_dir, base_config, status)

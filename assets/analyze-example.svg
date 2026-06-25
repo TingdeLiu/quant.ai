@@ -1,4 +1,4 @@
-<svg class="rich-terminal" viewBox="0 0 1141 342.79999999999995" xmlns="http://www.w3.org/2000/svg">
+<svg class="rich-terminal" viewBox="0 0 1141 391.59999999999997" xmlns="http://www.w3.org/2000/svg">
     <!-- Generated with Rich https://www.textualize.io -->
     <style>
 
@@ -19,85 +19,93 @@
         font-weight: 700;
     }
 
-    .terminal-2810843728-matrix {
-        font-family: 'Fira Code', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', 'WenQuanYi Zen Hei', monospace;
+    .terminal-441954241-matrix {
+        font-family: Fira Code, monospace;
         font-size: 20px;
         line-height: 24.4px;
         font-variant-east-asian: full-width;
     }
 
-    .terminal-2810843728-title {
+    .terminal-441954241-title {
         font-size: 18px;
         font-weight: bold;
         font-family: arial;
     }
 
-    .terminal-2810843728-r1 { fill: #98a84b;font-weight: bold }
-.terminal-2810843728-r2 { fill: #c5c8c6 }
-.terminal-2810843728-r3 { fill: #868887 }
+    .terminal-441954241-r1 { fill: #98a84b;font-weight: bold }
+.terminal-441954241-r2 { fill: #c5c8c6 }
+.terminal-441954241-r3 { fill: #868887 }
     </style>
 
     <defs>
-    <clipPath id="terminal-2810843728-clip-terminal">
-      <rect x="0" y="0" width="1121.3999999999999" height="291.79999999999995" />
+    <clipPath id="terminal-441954241-clip-terminal">
+      <rect x="0" y="0" width="1121.3999999999999" height="340.59999999999997" />
     </clipPath>
-    <clipPath id="terminal-2810843728-line-0">
+    <clipPath id="terminal-441954241-line-0">
     <rect x="0" y="1.5" width="1122.4" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-2810843728-line-1">
+<clipPath id="terminal-441954241-line-1">
     <rect x="0" y="25.9" width="1122.4" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-2810843728-line-2">
+<clipPath id="terminal-441954241-line-2">
     <rect x="0" y="50.3" width="1122.4" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-2810843728-line-3">
+<clipPath id="terminal-441954241-line-3">
     <rect x="0" y="74.7" width="1122.4" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-2810843728-line-4">
+<clipPath id="terminal-441954241-line-4">
     <rect x="0" y="99.1" width="1122.4" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-2810843728-line-5">
+<clipPath id="terminal-441954241-line-5">
     <rect x="0" y="123.5" width="1122.4" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-2810843728-line-6">
+<clipPath id="terminal-441954241-line-6">
     <rect x="0" y="147.9" width="1122.4" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-2810843728-line-7">
+<clipPath id="terminal-441954241-line-7">
     <rect x="0" y="172.3" width="1122.4" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-2810843728-line-8">
+<clipPath id="terminal-441954241-line-8">
     <rect x="0" y="196.7" width="1122.4" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-2810843728-line-9">
+<clipPath id="terminal-441954241-line-9">
     <rect x="0" y="221.1" width="1122.4" height="24.65"/>
             </clipPath>
-<clipPath id="terminal-2810843728-line-10">
+<clipPath id="terminal-441954241-line-10">
     <rect x="0" y="245.5" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-441954241-line-11">
+    <rect x="0" y="269.9" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-441954241-line-12">
+    <rect x="0" y="294.3" width="1122.4" height="24.65"/>
             </clipPath>
     </defs>
 
-    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="1139" height="340.8" rx="8"/><text class="terminal-2810843728-title" fill="#c5c8c6" text-anchor="middle" x="569" y="27">quant-ai&#160;analyze&#160;AAPL</text>
+    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="1139" height="389.6" rx="8"/><text class="terminal-441954241-title" fill="#c5c8c6" text-anchor="middle" x="569" y="27">quant-ai&#160;analyze&#160;AAPL</text>
             <g transform="translate(26,22)">
             <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
             <circle cx="22" cy="0" r="7" fill="#febc2e"/>
             <circle cx="44" cy="0" r="7" fill="#28c840"/>
             </g>
         
-    <g transform="translate(9, 41)" clip-path="url(#terminal-2810843728-clip-terminal)">
+    <g transform="translate(9, 41)" clip-path="url(#terminal-441954241-clip-terminal)">
     
-    <g class="terminal-2810843728-matrix">
-    <text class="terminal-2810843728-r1" x="0" y="20" textLength="24.4" clip-path="url(#terminal-2810843728-line-0)">+-</text><text class="terminal-2810843728-r1" x="24.4" y="20" textLength="341.6" clip-path="url(#terminal-2810843728-line-0)">----------------------------</text><text class="terminal-2810843728-r1" x="378.2" y="20" textLength="134.2" clip-path="url(#terminal-2810843728-line-0)">AAPL&#160;—&#160;强烈看多</text><text class="terminal-2810843728-r1" x="561.2" y="20" textLength="109.8" clip-path="url(#terminal-2810843728-line-0)">&#160;&#160;（信心：高）&#160;</text><text class="terminal-2810843728-r1" x="744.2" y="20" textLength="353.8" clip-path="url(#terminal-2810843728-line-0)">-----------------------------</text><text class="terminal-2810843728-r1" x="1098" y="20" textLength="24.4" clip-path="url(#terminal-2810843728-line-0)">-+</text><text class="terminal-2810843728-r2" x="1122.4" y="20" textLength="12.2" clip-path="url(#terminal-2810843728-line-0)">
-</text><text class="terminal-2810843728-r1" x="0" y="44.4" textLength="12.2" clip-path="url(#terminal-2810843728-line-1)">|</text><text class="terminal-2810843728-r3" x="24.4" y="44.4" textLength="85.4" clip-path="url(#terminal-2810843728-line-1)">&#160;&#160;&#160;&#160;最新价</text><text class="terminal-2810843728-r2" x="170.8" y="44.4" textLength="756.4" clip-path="url(#terminal-2810843728-line-1)">293.08&#160;&#160;（2026-06-24）&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-2810843728-r1" x="1110.2" y="44.4" textLength="12.2" clip-path="url(#terminal-2810843728-line-1)">|</text><text class="terminal-2810843728-r2" x="1122.4" y="44.4" textLength="12.2" clip-path="url(#terminal-2810843728-line-1)">
-</text><text class="terminal-2810843728-r1" x="0" y="68.8" textLength="12.2" clip-path="url(#terminal-2810843728-line-2)">|</text><text class="terminal-2810843728-r3" x="24.4" y="68.8" textLength="73.2" clip-path="url(#terminal-2810843728-line-2)">&#160;&#160;区间涨跌</text><text class="terminal-2810843728-r2" x="170.8" y="68.8" textLength="732" clip-path="url(#terminal-2810843728-line-2)">1月&#160;-5.1%&#160;&#160;·&#160;&#160;3月&#160;+16.6%&#160;&#160;·&#160;&#160;6月&#160;+7.3%&#160;&#160;·&#160;&#160;1年&#160;+46.0%&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-2810843728-r1" x="1110.2" y="68.8" textLength="12.2" clip-path="url(#terminal-2810843728-line-2)">|</text><text class="terminal-2810843728-r2" x="1122.4" y="68.8" textLength="12.2" clip-path="url(#terminal-2810843728-line-2)">
-</text><text class="terminal-2810843728-r1" x="0" y="93.2" textLength="12.2" clip-path="url(#terminal-2810843728-line-3)">|</text><text class="terminal-2810843728-r3" x="24.4" y="93.2" textLength="97.6" clip-path="url(#terminal-2810843728-line-3)">RSI&#160;/&#160;波动</text><text class="terminal-2810843728-r2" x="170.8" y="93.2" textLength="732" clip-path="url(#terminal-2810843728-line-3)">RSI&#160;32.7&#160;&#160;·&#160;&#160;年化波动&#160;+24.1%&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-2810843728-r1" x="1110.2" y="93.2" textLength="12.2" clip-path="url(#terminal-2810843728-line-3)">|</text><text class="terminal-2810843728-r2" x="1122.4" y="93.2" textLength="12.2" clip-path="url(#terminal-2810843728-line-3)">
-</text><text class="terminal-2810843728-r1" x="0" y="117.6" textLength="12.2" clip-path="url(#terminal-2810843728-line-4)">|</text><text class="terminal-2810843728-r3" x="24.4" y="117.6" textLength="97.6" clip-path="url(#terminal-2810843728-line-4)">&#160;&#160;&#160;&#160;&#160;&#160;均线</text><text class="terminal-2810843728-r2" x="170.8" y="117.6" textLength="780.8" clip-path="url(#terminal-2810843728-line-4)">MA20&#160;301.51&#160;&#160;·&#160;&#160;MA50&#160;290.73&#160;&#160;·&#160;&#160;MA200&#160;268.64&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-2810843728-r1" x="1110.2" y="117.6" textLength="12.2" clip-path="url(#terminal-2810843728-line-4)">|</text><text class="terminal-2810843728-r2" x="1122.4" y="117.6" textLength="12.2" clip-path="url(#terminal-2810843728-line-4)">
-</text><text class="terminal-2810843728-r1" x="0" y="142" textLength="12.2" clip-path="url(#terminal-2810843728-line-5)">|</text><text class="terminal-2810843728-r3" x="24.4" y="142" textLength="97.6" clip-path="url(#terminal-2810843728-line-5)">&#160;&#160;&#160;&#160;&#160;&#160;解读</text><text class="terminal-2810843728-r2" x="170.8" y="142" textLength="390.4" clip-path="url(#terminal-2810843728-line-5)">趋势与动量同向走强，属于研究买入候选；仍需结合个人风险承受能力。</text><text class="terminal-2810843728-r1" x="1110.2" y="142" textLength="12.2" clip-path="url(#terminal-2810843728-line-5)">|</text><text class="terminal-2810843728-r2" x="1122.4" y="142" textLength="12.2" clip-path="url(#terminal-2810843728-line-5)">
-</text><text class="terminal-2810843728-r1" x="0" y="166.4" textLength="12.2" clip-path="url(#terminal-2810843728-line-6)">|</text><text class="terminal-2810843728-r3" x="24.4" y="166.4" textLength="97.6" clip-path="url(#terminal-2810843728-line-6)">&#160;&#160;&#160;&#160;&#160;&#160;依据</text><text class="terminal-2810843728-r2" x="170.8" y="166.4" textLength="585.6" clip-path="url(#terminal-2810843728-line-6)">·&#160;价格&#160;293.08&#160;在&#160;50&#160;日均线&#160;290.73&#160;上方（中期趋势偏多）&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-2810843728-r1" x="1110.2" y="166.4" textLength="12.2" clip-path="url(#terminal-2810843728-line-6)">|</text><text class="terminal-2810843728-r2" x="1122.4" y="166.4" textLength="12.2" clip-path="url(#terminal-2810843728-line-6)">
-</text><text class="terminal-2810843728-r1" x="0" y="190.8" textLength="12.2" clip-path="url(#terminal-2810843728-line-7)">|</text><text class="terminal-2810843728-r2" x="170.8" y="190.8" textLength="744.2" clip-path="url(#terminal-2810843728-line-7)">·&#160;12-1&#160;月动量&#160;+53.4%&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-2810843728-r1" x="1110.2" y="190.8" textLength="12.2" clip-path="url(#terminal-2810843728-line-7)">|</text><text class="terminal-2810843728-r2" x="1122.4" y="190.8" textLength="12.2" clip-path="url(#terminal-2810843728-line-7)">
-</text><text class="terminal-2810843728-r1" x="0" y="215.2" textLength="12.2" clip-path="url(#terminal-2810843728-line-8)">|</text><text class="terminal-2810843728-r2" x="170.8" y="215.2" textLength="707.6" clip-path="url(#terminal-2810843728-line-8)">·&#160;RSI&#160;33（中性区间）&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-2810843728-r1" x="1110.2" y="215.2" textLength="12.2" clip-path="url(#terminal-2810843728-line-8)">|</text><text class="terminal-2810843728-r2" x="1122.4" y="215.2" textLength="12.2" clip-path="url(#terminal-2810843728-line-8)">
-</text><text class="terminal-2810843728-r1" x="0" y="239.6" textLength="12.2" clip-path="url(#terminal-2810843728-line-9)">|</text><text class="terminal-2810843728-r3" x="24.4" y="239.6" textLength="61" clip-path="url(#terminal-2810843728-line-9)">参考关注位</text><text class="terminal-2810843728-r2" x="170.8" y="239.6" textLength="707.6" clip-path="url(#terminal-2810843728-line-9)">支撑&#160;290.73&#160;&#160;·&#160;&#160;参考止损&#160;275.5&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-2810843728-r1" x="1110.2" y="239.6" textLength="12.2" clip-path="url(#terminal-2810843728-line-9)">|</text><text class="terminal-2810843728-r2" x="1122.4" y="239.6" textLength="12.2" clip-path="url(#terminal-2810843728-line-9)">
-</text><text class="terminal-2810843728-r1" x="0" y="264" textLength="1122.4" clip-path="url(#terminal-2810843728-line-10)">+------------------------------------------------------------------------------------------+</text><text class="terminal-2810843728-r2" x="1122.4" y="264" textLength="12.2" clip-path="url(#terminal-2810843728-line-10)">
-</text><text class="terminal-2810843728-r3" x="0" y="288.4" textLength="500.2" clip-path="url(#terminal-2810843728-line-11)">本分析基于历史价格的量化指标，仅供研究参考，不构成投资建议，请自行决策并控制风险。</text><text class="terminal-2810843728-r2" x="1122.4" y="288.4" textLength="12.2" clip-path="url(#terminal-2810843728-line-11)">
+    <g class="terminal-441954241-matrix">
+    <text class="terminal-441954241-r1" x="0" y="20" textLength="24.4" clip-path="url(#terminal-441954241-line-0)">+-</text><text class="terminal-441954241-r1" x="24.4" y="20" textLength="292.8" clip-path="url(#terminal-441954241-line-0)">------------------------</text><text class="terminal-441954241-r1" x="329.4" y="20" textLength="207.4" clip-path="url(#terminal-441954241-line-0)">AAPL&#160;—&#160;Strong&#160;Buy</text><text class="terminal-441954241-r1" x="536.8" y="20" textLength="256.2" clip-path="url(#terminal-441954241-line-0)">&#160;&#160;(confidence:&#160;High)&#160;</text><text class="terminal-441954241-r1" x="793" y="20" textLength="305" clip-path="url(#terminal-441954241-line-0)">-------------------------</text><text class="terminal-441954241-r1" x="1098" y="20" textLength="24.4" clip-path="url(#terminal-441954241-line-0)">-+</text><text class="terminal-441954241-r2" x="1122.4" y="20" textLength="12.2" clip-path="url(#terminal-441954241-line-0)">
+</text><text class="terminal-441954241-r1" x="0" y="44.4" textLength="12.2" clip-path="url(#terminal-441954241-line-1)">|</text><text class="terminal-441954241-r3" x="24.4" y="44.4" textLength="122" clip-path="url(#terminal-441954241-line-1)">&#160;&#160;&#160;&#160;&#160;&#160;Last</text><text class="terminal-441954241-r2" x="170.8" y="44.4" textLength="927.2" clip-path="url(#terminal-441954241-line-1)">293.08&#160;&#160;(2026-06-24)&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-441954241-r1" x="1110.2" y="44.4" textLength="12.2" clip-path="url(#terminal-441954241-line-1)">|</text><text class="terminal-441954241-r2" x="1122.4" y="44.4" textLength="12.2" clip-path="url(#terminal-441954241-line-1)">
+</text><text class="terminal-441954241-r1" x="0" y="68.8" textLength="12.2" clip-path="url(#terminal-441954241-line-2)">|</text><text class="terminal-441954241-r3" x="24.4" y="68.8" textLength="122" clip-path="url(#terminal-441954241-line-2)">&#160;&#160;&#160;Returns</text><text class="terminal-441954241-r2" x="170.8" y="68.8" textLength="927.2" clip-path="url(#terminal-441954241-line-2)">1M&#160;-5.1%&#160;&#160;·&#160;&#160;3M&#160;+16.6%&#160;&#160;·&#160;&#160;6M&#160;+7.3%&#160;&#160;·&#160;&#160;1Y&#160;+46.0%&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-441954241-r1" x="1110.2" y="68.8" textLength="12.2" clip-path="url(#terminal-441954241-line-2)">|</text><text class="terminal-441954241-r2" x="1122.4" y="68.8" textLength="12.2" clip-path="url(#terminal-441954241-line-2)">
+</text><text class="terminal-441954241-r1" x="0" y="93.2" textLength="12.2" clip-path="url(#terminal-441954241-line-3)">|</text><text class="terminal-441954241-r3" x="24.4" y="93.2" textLength="122" clip-path="url(#terminal-441954241-line-3)">&#160;RSI&#160;/&#160;Vol</text><text class="terminal-441954241-r2" x="170.8" y="93.2" textLength="927.2" clip-path="url(#terminal-441954241-line-3)">RSI&#160;32.7&#160;&#160;·&#160;&#160;ann.&#160;vol&#160;+24.1%&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-441954241-r1" x="1110.2" y="93.2" textLength="12.2" clip-path="url(#terminal-441954241-line-3)">|</text><text class="terminal-441954241-r2" x="1122.4" y="93.2" textLength="12.2" clip-path="url(#terminal-441954241-line-3)">
+</text><text class="terminal-441954241-r1" x="0" y="117.6" textLength="12.2" clip-path="url(#terminal-441954241-line-4)">|</text><text class="terminal-441954241-r3" x="24.4" y="117.6" textLength="122" clip-path="url(#terminal-441954241-line-4)">&#160;&#160;&#160;&#160;&#160;&#160;&#160;MAs</text><text class="terminal-441954241-r2" x="170.8" y="117.6" textLength="927.2" clip-path="url(#terminal-441954241-line-4)">MA20&#160;301.51&#160;&#160;·&#160;&#160;MA50&#160;290.73&#160;&#160;·&#160;&#160;MA200&#160;268.64&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-441954241-r1" x="1110.2" y="117.6" textLength="12.2" clip-path="url(#terminal-441954241-line-4)">|</text><text class="terminal-441954241-r2" x="1122.4" y="117.6" textLength="12.2" clip-path="url(#terminal-441954241-line-4)">
+</text><text class="terminal-441954241-r1" x="0" y="142" textLength="12.2" clip-path="url(#terminal-441954241-line-5)">|</text><text class="terminal-441954241-r3" x="24.4" y="142" textLength="122" clip-path="url(#terminal-441954241-line-5)">&#160;&#160;&#160;&#160;&#160;&#160;Note</text><text class="terminal-441954241-r2" x="170.8" y="142" textLength="927.2" clip-path="url(#terminal-441954241-line-5)">Trend&#160;and&#160;momentum&#160;are&#160;strengthening&#160;together&#160;—&#160;a&#160;research&#160;buy&#160;candidate;&#160;&#160;&#160;</text><text class="terminal-441954241-r1" x="1110.2" y="142" textLength="12.2" clip-path="url(#terminal-441954241-line-5)">|</text><text class="terminal-441954241-r2" x="1122.4" y="142" textLength="12.2" clip-path="url(#terminal-441954241-line-5)">
+</text><text class="terminal-441954241-r1" x="0" y="166.4" textLength="12.2" clip-path="url(#terminal-441954241-line-6)">|</text><text class="terminal-441954241-r2" x="170.8" y="166.4" textLength="927.2" clip-path="url(#terminal-441954241-line-6)">still&#160;match&#160;it&#160;to&#160;your&#160;own&#160;risk&#160;tolerance.&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-441954241-r1" x="1110.2" y="166.4" textLength="12.2" clip-path="url(#terminal-441954241-line-6)">|</text><text class="terminal-441954241-r2" x="1122.4" y="166.4" textLength="12.2" clip-path="url(#terminal-441954241-line-6)">
+</text><text class="terminal-441954241-r1" x="0" y="190.8" textLength="12.2" clip-path="url(#terminal-441954241-line-7)">|</text><text class="terminal-441954241-r3" x="24.4" y="190.8" textLength="122" clip-path="url(#terminal-441954241-line-7)">&#160;&#160;&#160;Reasons</text><text class="terminal-441954241-r2" x="170.8" y="190.8" textLength="927.2" clip-path="url(#terminal-441954241-line-7)">·&#160;Price&#160;293.08&#160;is&#160;above&#160;the&#160;50-day&#160;MA&#160;290.73&#160;(mid-term&#160;uptrend)&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-441954241-r1" x="1110.2" y="190.8" textLength="12.2" clip-path="url(#terminal-441954241-line-7)">|</text><text class="terminal-441954241-r2" x="1122.4" y="190.8" textLength="12.2" clip-path="url(#terminal-441954241-line-7)">
+</text><text class="terminal-441954241-r1" x="0" y="215.2" textLength="12.2" clip-path="url(#terminal-441954241-line-8)">|</text><text class="terminal-441954241-r2" x="170.8" y="215.2" textLength="927.2" clip-path="url(#terminal-441954241-line-8)">·&#160;12-1&#160;month&#160;momentum&#160;+53.4%&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-441954241-r1" x="1110.2" y="215.2" textLength="12.2" clip-path="url(#terminal-441954241-line-8)">|</text><text class="terminal-441954241-r2" x="1122.4" y="215.2" textLength="12.2" clip-path="url(#terminal-441954241-line-8)">
+</text><text class="terminal-441954241-r1" x="0" y="239.6" textLength="12.2" clip-path="url(#terminal-441954241-line-9)">|</text><text class="terminal-441954241-r2" x="170.8" y="239.6" textLength="927.2" clip-path="url(#terminal-441954241-line-9)">·&#160;RSI&#160;33&#160;(neutral&#160;range)&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-441954241-r1" x="1110.2" y="239.6" textLength="12.2" clip-path="url(#terminal-441954241-line-9)">|</text><text class="terminal-441954241-r2" x="1122.4" y="239.6" textLength="12.2" clip-path="url(#terminal-441954241-line-9)">
+</text><text class="terminal-441954241-r1" x="0" y="264" textLength="12.2" clip-path="url(#terminal-441954241-line-10)">|</text><text class="terminal-441954241-r3" x="24.4" y="264" textLength="122" clip-path="url(#terminal-441954241-line-10)">Key&#160;levels</text><text class="terminal-441954241-r2" x="170.8" y="264" textLength="927.2" clip-path="url(#terminal-441954241-line-10)">support&#160;290.73&#160;&#160;·&#160;&#160;stop&#160;275.5&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-441954241-r1" x="1110.2" y="264" textLength="12.2" clip-path="url(#terminal-441954241-line-10)">|</text><text class="terminal-441954241-r2" x="1122.4" y="264" textLength="12.2" clip-path="url(#terminal-441954241-line-10)">
+</text><text class="terminal-441954241-r1" x="0" y="288.4" textLength="1122.4" clip-path="url(#terminal-441954241-line-11)">+------------------------------------------------------------------------------------------+</text><text class="terminal-441954241-r2" x="1122.4" y="288.4" textLength="12.2" clip-path="url(#terminal-441954241-line-11)">
+</text><text class="terminal-441954241-r3" x="0" y="312.8" textLength="1098" clip-path="url(#terminal-441954241-line-12)">This&#160;analysis&#160;uses&#160;quantitative&#160;indicators&#160;over&#160;historical&#160;prices,&#160;for&#160;research&#160;reference&#160;</text><text class="terminal-441954241-r2" x="1122.4" y="312.8" textLength="12.2" clip-path="url(#terminal-441954241-line-12)">
+</text><text class="terminal-441954241-r3" x="0" y="337.2" textLength="854" clip-path="url(#terminal-441954241-line-13)">only&#160;—&#160;not&#160;investment&#160;advice.&#160;Make&#160;your&#160;own&#160;decisions&#160;and&#160;manage&#160;risk.</text><text class="terminal-441954241-r2" x="1122.4" y="337.2" textLength="12.2" clip-path="url(#terminal-441954241-line-13)">
 </text>
     </g>
     </g>

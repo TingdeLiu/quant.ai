@@ -21,6 +21,7 @@ from quant_agent.analyze import _classify_fetch_error
 from quant_agent.config import DataConfig
 from quant_agent.data import load_prices
 from quant_agent.features import build_signals
+from quant_agent.i18n import tr
 from quant_agent.recommendations import (
     RECOMMENDATION_PROFILES,
     _latest_signal_frame,
@@ -32,21 +33,36 @@ DEFAULT_BENCHMARK = "SPY"
 DISCOVERY_RATIO = 0.5
 DEFAULT_HISTORY_START = "2020-01-01"
 
-# 风险偏好（中文）→ 推荐打分风格（recommendations.RECOMMENDATION_PROFILES 的 key）。
+# 风险偏好 → 推荐打分风格（recommendations.RECOMMENDATION_PROFILES 的 key）。
+# 同时接受中文与英文写法，便于双语 init。
 RISK_TO_PROFILE: dict[str, str] = {
-    "长线": "long_term",
-    "波段": "swing",
-    "短线": "short_term",
-    "防守": "defensive",
-    "激进": "aggressive",
+    "长线": "long_term", "波段": "swing", "短线": "short_term", "防守": "defensive", "激进": "aggressive",
+    "long_term": "long_term", "swing": "swing", "short_term": "short_term", "defensive": "defensive", "aggressive": "aggressive",
 }
 
-DISCOVERY_STATUS_MESSAGES: dict[str, str] = {
-    "ok": "",
-    "offline": "网络不可用，已跳过「发现池」推荐，仅写入你自选的部分；联网后运行 `quant-ai refresh-universe` 即可补全。",
-    "no_data": "行情数据暂时不可用，已跳过「发现池」推荐；稍后运行 `quant-ai refresh-universe` 可补全。",
-    "empty": "候选目录在你的自选之外已无可推荐标的。",
+# 发现池状态提示，(英文, 中文)。
+_DISCOVERY_STATUS: dict[str, tuple[str, str]] = {
+    "ok": ("", ""),
+    "offline": (
+        "Network unavailable — skipped the discovery picks and wrote only your own selection; "
+        "run `quant-ai refresh-universe` once online to fill it in.",
+        "网络不可用，已跳过「发现池」推荐，仅写入你自选的部分；联网后运行 `quant-ai refresh-universe` 即可补全。",
+    ),
+    "no_data": (
+        "Market data temporarily unavailable — skipped the discovery picks; run "
+        "`quant-ai refresh-universe` later to fill it in.",
+        "行情数据暂时不可用，已跳过「发现池」推荐；稍后运行 `quant-ai refresh-universe` 可补全。",
+    ),
+    "empty": (
+        "No candidates left to recommend outside your own selection.",
+        "候选目录在你的自选之外已无可推荐标的。",
+    ),
 }
+
+
+def discovery_status_message(status: str, language: str = "en") -> str:
+    en, zh = _DISCOVERY_STATUS.get(status, ("", ""))
+    return tr(en, zh, language)
 
 CATALOG_COLUMNS = ["symbol", "name", "sector"]
 UNIVERSE_COLUMNS = ["symbol", "name", "sector", "source"]
@@ -60,6 +76,7 @@ class UserProfile:
     tickers: list[str] = field(default_factory=list)
     risk: str = "长线"
     benchmark: str = DEFAULT_BENCHMARK
+    language: str = "en"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -71,6 +88,7 @@ class UserProfile:
             tickers=list(payload.get("tickers", [])),
             risk=str(payload.get("risk", "长线")),
             benchmark=str(payload.get("benchmark", DEFAULT_BENCHMARK)).upper(),
+            language=str(payload.get("language", "en")),
         )
 
 
@@ -239,6 +257,7 @@ def write_personal_universe(
     # 绝对路径：my.yaml 是用户本地生成文件（已 gitignore），不同 base 解析下都稳妥。
     base["data"]["universe_path"] = universe_csv.resolve().as_posix()
     base.setdefault("strategy", {})["benchmark"] = profile.benchmark
+    base["language"] = profile.language
 
     my_yaml = configs_dir / "my.yaml"
     my_yaml.write_text(

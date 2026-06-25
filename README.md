@@ -12,7 +12,7 @@
 `quant.ai` is a command-line quant-research toolkit for **US equities**, built for everyday investors. Type one command and get an explainable rating, key support/stop levels, and the reasoning behind them — all derived from historical prices, fully offline-friendly, and with no brokerage attached.
 
 > ⚠️ Research only — **not investment advice**. It never places or suggests live orders.
-> Analysis output (ratings, reasons) is in **Chinese**; the tool targets Chinese-speaking investors researching US stocks.
+> Output is **English by default**; add `--lang zh` (or pick at `quant-ai init`) for Chinese (中文).
 
 ## Quick start
 
@@ -28,7 +28,7 @@ No entry point? `python -m quant_agent analyze AAPL` works the same.
 
 <img src="assets/analyze-example.svg" alt="Real output of quant-ai analyze AAPL" width="820">
 
-Real output from `quant-ai analyze AAPL`. The five ratings range from 强烈看多 *(strong buy)* through 中性 *(neutral)* to 强烈看空 *(strong sell)*. Add `--output-dir` to export Markdown + JSON, or `--chart` for a price/MA/RSI PNG.
+Real output from `quant-ai analyze AAPL` — **English by default**, `--lang zh` for Chinese. Ratings range from **Strong Buy** through **Neutral** to **Strong Sell**. Add `--output-dir` to export Markdown + JSON, or `--chart` for a PNG chart.
 
 ## Use it inside Claude or Codex
 

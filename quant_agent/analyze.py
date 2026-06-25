@@ -1,9 +1,12 @@
 """Fast, zero-config single-stock analysis for ordinary investors.
 
-`python -m quant_agent analyze AAPL MSFT` 直接拉取最近行情、计算可解释的技术指标，
-并给出中文「评级 + 理由 + 关键价位」。不需要回测、不需要股票池、不需要 YAML 配置。
+`python -m quant_agent analyze AAPL MSFT` pulls recent prices, computes explainable
+technical indicators, and returns a "rating + reasons + key levels" verdict. No
+backtest, no universe, no YAML config required. Output defaults to English; pass
+`language="zh"` (CLI `--lang zh`) for Chinese.
 
-这只是基于历史价格的量化研究分析，不构成投资建议，也不会产生任何下单指令。
+This is quantitative research over historical prices only — not investment advice,
+and it never produces any order instruction.
 """
 
 from __future__ import annotations
@@ -19,16 +22,49 @@ import pandas as pd
 
 from quant_agent.config import DataConfig, LLMConfig
 from quant_agent.data import load_prices
+from quant_agent.i18n import DEFAULT_LANGUAGE, normalize_language, tr
 
-DISCLAIMER = "本分析基于历史价格的量化指标，仅供研究参考，不构成投资建议，请自行决策并控制风险。"
 
-# 评级桶：从看多到看空，带中文标签和操作语气。
-RATING_BUCKETS = [
-    (1.10, "强烈看多", "趋势与动量同向走强，属于研究买入候选；仍需结合个人风险承受能力。"),
-    (0.40, "偏多", "多头信号占优，可逢回调关注，不建议追高。"),
-    (-0.40, "中性", "多空力量接近均衡，方向不明，宜观望等待趋势明朗。"),
-    (-1.10, "偏空", "空头信号占优，趋势走弱，持仓者注意控制风险。"),
-    (-99.0, "强烈看空", "趋势与动量同向走弱，研究层面建议回避。"),
+def _disclaimer(lang: str) -> str:
+    return tr(
+        "This analysis uses quantitative indicators over historical prices, for research "
+        "reference only — not investment advice. Make your own decisions and manage risk.",
+        "本分析基于历史价格的量化指标，仅供研究参考，不构成投资建议，请自行决策并控制风险。",
+        lang,
+    )
+
+
+# 评级桶：从看多到看空。标签与操作语气都带 (英文, 中文)。
+RATING_BUCKETS: list[tuple[float, tuple[str, str], tuple[str, str]]] = [
+    (
+        1.10,
+        ("Strong Buy", "强烈看多"),
+        (
+            "Trend and momentum are strengthening together — a research buy candidate; "
+            "still match it to your own risk tolerance.",
+            "趋势与动量同向走强，属于研究买入候选；仍需结合个人风险承受能力。",
+        ),
+    ),
+    (
+        0.40,
+        ("Mildly Bullish", "偏多"),
+        ("Bullish signals dominate; watch for pullbacks rather than chasing highs.", "多头信号占优，可逢回调关注，不建议追高。"),
+    ),
+    (
+        -0.40,
+        ("Neutral", "中性"),
+        ("Bulls and bears are roughly balanced; direction unclear — wait for a clearer trend.", "多空力量接近均衡，方向不明，宜观望等待趋势明朗。"),
+    ),
+    (
+        -1.10,
+        ("Mildly Bearish", "偏空"),
+        ("Bearish signals dominate; trend weakening — holders should manage risk.", "空头信号占优，趋势走弱，持仓者注意控制风险。"),
+    ),
+    (
+        -99.0,
+        ("Strong Sell", "强烈看空"),
+        ("Trend and momentum are weakening together; from a research view, avoid.", "趋势与动量同向走弱，研究层面建议回避。"),
+    ),
 ]
 
 
@@ -71,21 +107,35 @@ def analyze_symbols(
     lookback_days: int = 600,
     cache_dir: Path | None = None,
     llm_config: LLMConfig | None = None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> dict[str, Any]:
     """分析一组标的，返回结构化结果（含可选的 LLM 自然语言综述）。"""
+    lang = normalize_language(language)
     cleaned = _clean_symbols(symbols)
     if not cleaned:
-        raise ValueError("请至少提供一个股票代码，例如 AAPL")
+        raise ValueError(tr("Please provide at least one ticker, e.g. AAPL", "请至少提供一个股票代码，例如 AAPL", lang))
 
     prices, fetch_error = _fetch_prices(cleaned, lookback_days=lookback_days, cache_dir=cache_dir)
     by_symbol = {sym: g for sym, g in prices.groupby("symbol")} if not prices.empty else {}
 
     if fetch_error == "network":
-        missing_msg = "网络不可用：无法连接行情数据源（Yahoo Finance）。请检查网络/代理后重试。"
+        missing_msg = tr(
+            "Network unavailable: can't reach the market data source (Yahoo Finance). Check your network/proxy and retry.",
+            "网络不可用：无法连接行情数据源（Yahoo Finance）。请检查网络/代理后重试。",
+            lang,
+        )
     elif fetch_error == "other":
-        missing_msg = "行情拉取失败：数据源暂时无响应，请稍后重试。"
+        missing_msg = tr(
+            "Data fetch failed: the data source is temporarily unresponsive, please retry later.",
+            "行情拉取失败：数据源暂时无响应，请稍后重试。",
+            lang,
+        )
     else:
-        missing_msg = "未获取到足够数据：请确认是美股代码（如 AAPL、MSFT），且该标的未退市或暂停交易。"
+        missing_msg = tr(
+            "Not enough data: make sure it's a US ticker (e.g. AAPL, MSFT) that isn't delisted or halted.",
+            "未获取到足够数据：请确认是美股代码（如 AAPL、MSFT），且该标的未退市或暂停交易。",
+            lang,
+        )
 
     results: list[SymbolAnalysis] = []
     for symbol in cleaned:
@@ -93,21 +143,23 @@ def analyze_symbols(
         if group is None or len(group) < 30:
             results.append(SymbolAnalysis(symbol=symbol, ok=False, error=missing_msg))
             continue
-        results.append(_analyze_one(symbol, group.sort_values("date")))
+        results.append(_analyze_one(symbol, group.sort_values("date"), language=lang))
 
-    narrative, narrative_meta = _maybe_narrative(results, llm_config)
+    narrative, narrative_meta = _maybe_narrative(results, llm_config, lang)
     return {
         "as_of": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "language": lang,
         "symbols": cleaned,
         "results": [r.to_dict() for r in results],
         "narrative": narrative,
         "narrative_meta": narrative_meta,
-        "disclaimer": DISCLAIMER,
+        "disclaimer": _disclaimer(lang),
         "_objects": results,
     }
 
 
-def _analyze_one(symbol: str, g: pd.DataFrame) -> SymbolAnalysis:
+def _analyze_one(symbol: str, g: pd.DataFrame, language: str = DEFAULT_LANGUAGE) -> SymbolAnalysis:
+    lang = normalize_language(language)
     adj = g["adj_close"].astype(float).reset_index(drop=True)
     ret_1d = adj.pct_change()
     price = float(adj.iloc[-1])
@@ -137,22 +189,34 @@ def _analyze_one(symbol: str, g: pd.DataFrame) -> SymbolAnalysis:
     if ma50 is not None:
         if price > ma50:
             trend += 1.0
-            reasons.append(f"价格 {price:.2f} 在 50 日均线 {ma50:.2f} 上方（中期趋势偏多）")
+            reasons.append(tr(
+                f"Price {price:.2f} is above the 50-day MA {ma50:.2f} (mid-term uptrend)",
+                f"价格 {price:.2f} 在 50 日均线 {ma50:.2f} 上方（中期趋势偏多）",
+                lang,
+            ))
         else:
             trend -= 1.0
-            reasons.append(f"价格 {price:.2f} 跌破 50 日均线 {ma50:.2f}（中期趋势偏弱）")
+            reasons.append(tr(
+                f"Price {price:.2f} broke below the 50-day MA {ma50:.2f} (mid-term trend weakening)",
+                f"价格 {price:.2f} 跌破 50 日均线 {ma50:.2f}（中期趋势偏弱）",
+                lang,
+            ))
     if ma20 is not None and ma50 is not None:
         trend += 0.6 if ma20 > ma50 else -0.6
     if ma200 is not None:
         trend += 0.4 if price > ma200 else -0.4
         if price < ma200:
-            reasons.append(f"价格低于 200 日均线 {ma200:.2f}（长期趋势承压）")
+            reasons.append(tr(
+                f"Price is below the 200-day MA {ma200:.2f} (long-term trend under pressure)",
+                f"价格低于 200 日均线 {ma200:.2f}（长期趋势承压）",
+                lang,
+            ))
 
     # --- 动量分 ---
     momentum = 0.0
     if mom_12_1 is not None:
         momentum += _bucket(mom_12_1, [(0.20, 2.0), (0.05, 1.0), (-0.05, 0.0), (-0.20, -1.0)], -2.0)
-        reasons.append(f"12-1 月动量 {mom_12_1:+.1%}")
+        reasons.append(tr(f"12-1 month momentum {mom_12_1:+.1%}", f"12-1 月动量 {mom_12_1:+.1%}", lang))
     if ret_3m is not None:
         momentum += _bucket(ret_3m, [(0.10, 0.6), (0.0, 0.2), (-0.10, -0.2)], -0.6)
 
@@ -161,27 +225,47 @@ def _analyze_one(symbol: str, g: pd.DataFrame) -> SymbolAnalysis:
     if rsi is not None:
         if rsi >= 75:
             reversal -= 0.8
-            reasons.append(f"RSI {rsi:.0f} 进入超买区，短线有回调风险")
+            reasons.append(tr(
+                f"RSI {rsi:.0f} is in overbought territory; near-term pullback risk",
+                f"RSI {rsi:.0f} 进入超买区，短线有回调风险",
+                lang,
+            ))
         elif rsi <= 30:
             reversal += 0.8
-            reasons.append(f"RSI {rsi:.0f} 进入超卖区，短线或有反弹")
+            reasons.append(tr(
+                f"RSI {rsi:.0f} is in oversold territory; possible near-term bounce",
+                f"RSI {rsi:.0f} 进入超卖区，短线或有反弹",
+                lang,
+            ))
         else:
-            reasons.append(f"RSI {rsi:.0f}（中性区间）")
+            reasons.append(tr(f"RSI {rsi:.0f} (neutral range)", f"RSI {rsi:.0f}（中性区间）", lang))
 
     composite = 0.45 * trend + 0.40 * momentum + 0.15 * reversal
     composite = float(np.clip(composite, -2.5, 2.5))
 
-    rating, note = _rating_for(composite)
+    rating, note = _rating_for(composite, lang)
 
     # 波动率作为信心调节，而非方向
-    confidence = _confidence(composite, vol_annual)
+    confidence = _confidence(composite, vol_annual, lang)
     if vol_annual is not None and vol_annual > 0.55:
-        reasons.append(f"年化波动率约 {vol_annual:.0%}，价格波动较大，注意仓位控制")
+        reasons.append(tr(
+            f"Annualized volatility ~{vol_annual:.0%}; large swings, mind position sizing",
+            f"年化波动率约 {vol_annual:.0%}，价格波动较大，注意仓位控制",
+            lang,
+        ))
 
     if dist_high is not None and dist_high > -0.03:
-        reasons.append(f"接近 52 周高点（距高点 {dist_high:+.1%}）")
+        reasons.append(tr(
+            f"Near the 52-week high ({dist_high:+.1%} from high)",
+            f"接近 52 周高点（距高点 {dist_high:+.1%}）",
+            lang,
+        ))
     if dist_low is not None and dist_low < 0.05:
-        reasons.append(f"接近 52 周低点（距低点 {dist_low:+.1%}）")
+        reasons.append(tr(
+            f"Near the 52-week low ({dist_low:+.1%} from low)",
+            f"接近 52 周低点（距低点 {dist_low:+.1%}）",
+            lang,
+        ))
 
     levels = _key_levels(price, ma20, ma50, low_52w, vol_annual)
 
@@ -258,7 +342,7 @@ def _key_levels(
 
 
 def _maybe_narrative(
-    results: list[SymbolAnalysis], llm_config: LLMConfig | None
+    results: list[SymbolAnalysis], llm_config: LLMConfig | None, lang: str = DEFAULT_LANGUAGE
 ) -> tuple[str | None, dict[str, Any]]:
     if llm_config is None or not llm_config.enabled:
         return None, {"status": "disabled"}
@@ -269,15 +353,20 @@ def _maybe_narrative(
     for r in ok_results:
         m = r.metrics
         lines.append(
-            f"{r.symbol}: 评级={r.rating} 综合分={r.composite:+.2f} 价格={r.price} "
-            f"1月={m.get('ret_1m')} 3月={m.get('ret_3m')} 动量={m.get('momentum_12_1')} "
-            f"RSI={m.get('rsi_14')} 年化波动={m.get('vol_annual')}；依据：{'；'.join(r.reasons)}"
+            f"{r.symbol}: rating={r.rating} score={r.composite:+.2f} price={r.price} "
+            f"1M={m.get('ret_1m')} 3M={m.get('ret_3m')} momentum={m.get('momentum_12_1')} "
+            f"RSI={m.get('rsi_14')} ann_vol={m.get('vol_annual')}; reasons: {'; '.join(r.reasons)}"
         )
-    prompt = (
+    prompt = tr(
+        "Below are quantitative technical indicators and rule-based ratings for several US "
+        "stocks. Write a concise English summary for an ordinary investor: the trend and risk "
+        "of each name, a watch idea (e.g. buy on dips / wait / manage risk), and make clear this "
+        "is research analysis, not investment advice. Do not fabricate prices or fundamentals.\n\n",
         "以下是若干美股标的的量化技术指标和规则评级。请用简洁中文为普通投资者写一段综合解读，"
         "说明每只标的的趋势与风险，给出关注思路（如逢低关注/观望/控制风险），"
-        "并明确这是研究分析而非投资建议。不要编造价格或基本面信息。\n\n" + "\n".join(lines)
-    )
+        "并明确这是研究分析而非投资建议。不要编造价格或基本面信息。\n\n",
+        lang,
+    ) + "\n".join(lines)
     try:
         from quant_agent.llm import generate_market_narrative
 
@@ -305,7 +394,7 @@ _NETWORK_HINTS = (
 
 
 def _classify_fetch_error(exc: Exception) -> str:
-    """把底层异常翻译成普通用户能看懂的中文原因。"""
+    """把底层异常分类为 network / other，供调用方给出友好提示。"""
     text = f"{type(exc).__name__}: {exc}".lower()
     if any(hint in text for hint in _NETWORK_HINTS):
         return "network"
@@ -358,23 +447,23 @@ def _clean_symbols(symbols: list[str]) -> list[str]:
     return cleaned
 
 
-def _rating_for(composite: float) -> tuple[str, str]:
+def _rating_for(composite: float, lang: str = DEFAULT_LANGUAGE) -> tuple[str, str]:
     for threshold, label, note in RATING_BUCKETS:
         if composite >= threshold:
-            return label, note
-    last = RATING_BUCKETS[-1]
-    return last[1], last[2]
+            return tr(*label, lang), tr(*note, lang)
+    _, label, note = RATING_BUCKETS[-1]
+    return tr(*label, lang), tr(*note, lang)
 
 
-def _confidence(composite: float, vol_annual: float | None) -> str:
+def _confidence(composite: float, vol_annual: float | None, lang: str = DEFAULT_LANGUAGE) -> str:
     strength = abs(composite)
     if vol_annual is not None and vol_annual > 0.6:
         strength *= 0.8
     if strength >= 1.1:
-        return "高"
+        return tr("High", "高", lang)
     if strength >= 0.5:
-        return "中"
-    return "低"
+        return tr("Medium", "中", lang)
+    return tr("Low", "低", lang)
 
 
 def _bucket(value: float, thresholds: list[tuple[float, float]], floor: float) -> float:
@@ -497,7 +586,7 @@ def render_chart(result: SymbolAnalysis, output_dir: Path, lookback: int = 252) 
         2, 1, figsize=(9, 5.5), sharex=True, gridspec_kw={"height_ratios": [3, 1]}
     )
 
-    ax_price.plot(df["date"], df["close"], label="收盘价", color="#1f77b4", linewidth=1.4)
+    ax_price.plot(df["date"], df["close"], label="Close", color="#1f77b4", linewidth=1.4)
     for col, color, name in (("ma20", "#ff7f0e", "MA20"), ("ma50", "#2ca02c", "MA50"), ("ma200", "#9467bd", "MA200")):
         if df[col].notna().any():
             ax_price.plot(df["date"], df[col], label=name, color=color, linewidth=1.0, alpha=0.9)
@@ -526,35 +615,37 @@ def render_chart(result: SymbolAnalysis, output_dir: Path, lookback: int = 252) 
 
 
 def render_markdown(payload: dict[str, Any]) -> str:
-    lines = [f"# 行情分析 · {payload['as_of']}", ""]
+    lang = normalize_language(payload.get("language", DEFAULT_LANGUAGE))
+    lines = [f"# {tr('Market analysis', '行情分析', lang)} · {payload['as_of']}", ""]
     for r in payload["results"]:
         if not r["ok"]:
-            lines.append(f"## {r['symbol']} — 无法分析\n\n> {r['error']}\n")
+            lines.append(f"## {r['symbol']} — {tr('Unable to analyze', '无法分析', lang)}\n\n> {r['error']}\n")
             continue
         m = r["metrics"]
-        lines.append(f"## {r['symbol']} — {r['rating']}（信心：{r['confidence']}）")
+        lines.append(f"## {r['symbol']} — {r['rating']}（{tr('confidence', '信心', lang)}: {r['confidence']}）")
         lines.append("")
-        lines.append(f"- 最新价：{r['price']}（数据日期 {r['data_date']}）")
+        lines.append(f"- {tr('Last', '最新价', lang)}: {r['price']}（{tr('as of', '数据日期', lang)} {r['data_date']}）")
         lines.append(
-            f"- 区间涨跌：1月 {_pct(m.get('ret_1m'))} ｜ 3月 {_pct(m.get('ret_3m'))} ｜ "
-            f"6月 {_pct(m.get('ret_6m'))} ｜ 1年 {_pct(m.get('ret_1y'))}"
+            f"- {tr('Returns', '区间涨跌', lang)}: 1M {_pct(m.get('ret_1m'))} ｜ 3M {_pct(m.get('ret_3m'))} ｜ "
+            f"6M {_pct(m.get('ret_6m'))} ｜ 1Y {_pct(m.get('ret_1y'))}"
         )
         lines.append(
-            f"- 关键指标：RSI {m.get('rsi_14')} ｜ 年化波动 {_pct(m.get('vol_annual'))} ｜ "
+            f"- {tr('Key metrics', '关键指标', lang)}: RSI {m.get('rsi_14')} ｜ {tr('ann. vol', '年化波动', lang)} {_pct(m.get('vol_annual'))} ｜ "
             f"MA20 {m.get('ma20')} ｜ MA50 {m.get('ma50')} ｜ MA200 {m.get('ma200')}"
         )
-        lines.append(f"- 解读：{r['note']}")
+        lines.append(f"- {tr('Note', '解读', lang)}: {r['note']}")
         if r["reasons"]:
-            lines.append("- 依据：")
+            lines.append(f"- {tr('Reasons', '依据', lang)}:")
             for reason in r["reasons"]:
                 lines.append(f"  - {reason}")
         levels = r["levels"]
         lines.append(
-            f"- 参考关注位：支撑 {levels.get('reference_support')} ｜ 参考止损 {levels.get('reference_stop')}"
+            f"- {tr('Key levels', '参考关注位', lang)}: {tr('support', '支撑', lang)} {levels.get('reference_support')} ｜ "
+            f"{tr('stop', '参考止损', lang)} {levels.get('reference_stop')}"
         )
         lines.append("")
     if payload.get("narrative"):
-        lines.append("## AI 综合解读")
+        lines.append(f"## {tr('AI summary', 'AI 综合解读', lang)}")
         lines.append("")
         lines.append(payload["narrative"])
         lines.append("")

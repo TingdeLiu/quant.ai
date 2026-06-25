@@ -7,18 +7,30 @@ from _helpers import _analyze_one_dict, _trending_prices
 def test_analyze_bullish_vs_bearish() -> None:
     from quant_agent.analyze import _analyze_one
 
+    # 默认英文
     up = _analyze_one("UP", _trending_prices("UP", 0.0025))
     down = _analyze_one("DN", _trending_prices("DN", -0.0025))
 
     assert up.ok and down.ok
     assert up.composite > down.composite
-    assert up.rating in {"强烈看多", "偏多"}
-    assert down.rating in {"强烈看空", "偏空"}
+    assert up.rating in {"Strong Buy", "Mildly Bullish"}
+    assert down.rating in {"Strong Sell", "Mildly Bearish"}
+    assert up.confidence in {"High", "Medium", "Low"}
     assert up.price is not None
     assert up.levels["reference_stop"] is not None
     # 止损应低于支撑（若两者都存在）。
     if up.levels["reference_support"] is not None:
         assert up.levels["reference_stop"] <= up.levels["reference_support"]
+
+
+def test_analyze_chinese_language() -> None:
+    from quant_agent.analyze import _analyze_one
+
+    up = _analyze_one("UP", _trending_prices("UP", 0.0025), language="zh")
+    assert up.rating in {"强烈看多", "偏多"}
+    assert up.confidence in {"高", "中", "低"}
+    # 理由也应是中文
+    assert any("均线" in r or "动量" in r for r in up.reasons)
 
 
 def test_analyze_markdown_and_clean_symbols() -> None:
@@ -80,11 +92,14 @@ def test_analyze_symbols_network_failure_is_friendly(monkeypatch) -> None:
         raise ConnectionError("HTTPSConnectionPool: Max retries exceeded")
 
     monkeypatch.setattr(analyze_mod, "load_prices", _boom)
-    payload = analyze_mod.analyze_symbols(["AAPL", "MSFT"])
 
+    payload = analyze_mod.analyze_symbols(["AAPL", "MSFT"])  # 默认英文
     assert [r.ok for r in payload["_objects"]] == [False, False]
     for result in payload["_objects"]:
-        assert "网络不可用" in result.error
+        assert "Network unavailable" in result.error
+
+    payload_zh = analyze_mod.analyze_symbols(["AAPL"], language="zh")
+    assert "网络不可用" in payload_zh["_objects"][0].error
 
 
 def test_doctor_command_reports_environment(monkeypatch) -> None:
