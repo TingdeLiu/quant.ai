@@ -26,18 +26,18 @@ No entry point? `python -m quant_agent analyze AAPL` works the same.
 ## What you get
 
 ```text
-╭─ AAPL — 偏多  (confidence: medium) ─────────────────────────────╮
-│        最新价 (last)   226.34   (2025-06-20)                    │
-│      区间涨跌 (return)  1M +3.2%  ·  3M +8.1%  ·  6M +12.4%      │
-│    RSI / 波动           RSI 58.3  ·  ann. vol 24.5%             │
-│          均线 (MA)      MA20 220.15 · MA50 212.40 · MA200 198.7 │
-│          解读 (note)    多头排列，动量偏强，回踩 MA20 不破即偏多 │
-│          依据 (reasons) · 站上所有均线  · 12-1 动量为正          │
-│      参考关注位         支撑 212.40  ·  参考止损 205.10          │
-╰─────────────────────────────────────────────────────────────────╯
+AAPL — 偏多   (rating: mildly bullish · confidence: medium)
+
+  最新价 (last)      226.34    as of 2025-06-20
+  区间涨跌 (returns) 1M +3.2% · 3M +8.1% · 6M +12.4% · 1Y +18.0%
+  RSI / 波动 (vol)   RSI 58.3 · annualized vol 24.5%
+  均线 (MAs)         MA20 220.15 · MA50 212.40 · MA200 198.70
+  解读 (note)        多头排列，动量偏强；回踩 MA20 不破即偏多
+  依据 (reasons)     站上所有均线 · 12-1 动量为正 · RSI 健康
+  参考关注位 (levels) 支撑 212.40 · 参考止损 205.10
 ```
 
-`偏多` = mildly bullish (the five ratings range from 强烈看多 *strong buy* to 强烈看空 *strong sell*). Add `--output-dir` to export Markdown + JSON, or `--chart` for a price/MA/RSI PNG.
+The five ratings range from 强烈看多 *(strong buy)* through 中性 *(neutral)* to 强烈看空 *(strong sell)*. Add `--output-dir` to export Markdown + JSON, or `--chart` for a price/MA/RSI PNG. *(Numbers above are illustrative.)*
 
 ## Highlights
 
