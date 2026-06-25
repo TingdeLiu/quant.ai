@@ -53,6 +53,16 @@ Claude (or Codex) calls into real project data, shows you the quant analysis, an
 - 📊 **Local dashboard & daily market report** — a no-key market-intelligence brief and an interactive Markets dashboard, served locally.
 - 🛡️ **Safe by design** — deterministic signals + risk layer, friendly degradation on network/data errors, paper trading only — never submits real orders.
 
+## Daily market report & dashboard
+
+`quant-ai market-report` builds a daily US-equity research brief — market overview, watch / high-risk lists, quant picks by holding horizon, and free news headlines — in an Anthropic-style design:
+
+<img src="assets/market-report-example.png" alt="Daily market report" width="820">
+
+`quant-ai serve-dashboard` (or `write-dashboard`) renders backtest diagnostics — headline metrics, alerts, period breakdown, risk checks, positions and trades — with a built-in **EN / 中文** toggle:
+
+<img src="assets/dashboard-example.png" alt="Local dashboard" width="820">
+
 ## Common commands
 
 | Command | What it does |
