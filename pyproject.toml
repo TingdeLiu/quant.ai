@@ -37,9 +37,9 @@ dependencies = [
 dev = ["pytest>=8.2", "pytest-cov>=5.0", "ruff>=0.6"]
 
 [project.urls]
-Homepage = "https://github.com/Tyndall-Labs/quant.ai"
-Repository = "https://github.com/Tyndall-Labs/quant.ai"
-Issues = "https://github.com/Tyndall-Labs/quant.ai/issues"
+Homepage = "https://github.com/TingdeLiu/quant.ai"
+Repository = "https://github.com/TingdeLiu/quant.ai"
+Issues = "https://github.com/TingdeLiu/quant.ai/issues"
 
 [project.scripts]
 quant-ai = "quant_agent.cli:app"

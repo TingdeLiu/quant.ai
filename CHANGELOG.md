@@ -34,4 +34,4 @@
 ### 性能
 - yfinance 行情下载由逐只串行改为线程池并发（IO 密集、释放 GIL），大股票池下载耗时显著降低；保留单只指数退避重试与空数据跳过逻辑。
 
-[Unreleased]: https://github.com/Tyndall-Labs/quant.ai/commits/main
+[Unreleased]: https://github.com/TingdeLiu/quant.ai/commits/main
