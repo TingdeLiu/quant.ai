@@ -20,8 +20,10 @@ class DataConfig:
     csv_path: Path | None = None
     data_dir: Path | None = None
     universe_path: Path | None = None
-    # Hours before an open-ended (end=null) yfinance cache is refreshed.
-    # None disables expiry (cache reused forever); fixed end dates never expire.
+    # Open-ended (end=null) yfinance cache refreshes at most once per local calendar
+    # day: same-day calls always reuse the cache (avoids Yahoo anti-scraping); on a
+    # new day it refreshes once it is older than this many hours. None disables refresh
+    # entirely (cache reused forever); fixed end dates never expire.
     cache_ttl_hours: float | None = 6.0
 
 

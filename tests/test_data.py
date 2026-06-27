@@ -83,6 +83,6 @@ def test_yf_download_retry_recovers_after_transient_errors(monkeypatch) -> None:
 
     monkeypatch.setattr("time.sleep", lambda *_: None)
     cfg = DataConfig(source="yfinance", start="2024-01-01", end=None, cache_dir=Path("."), universe=["AAPL"])
-    out = data_mod._yf_download_retry(_FakeYf(), "AAPL", cfg, attempts=3)
+    out = data_mod._yf_download_retry(_FakeYf(), "AAPL", cfg, cfg.start, attempts=3)
     assert not out.empty
     assert calls["n"] == 3

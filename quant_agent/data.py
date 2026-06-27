@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -111,40 +112,92 @@ def validate_prices(prices: pd.DataFrame) -> list[dict[str, str]]:
     return issues
 
 
+# 最长保留约 10 年历史：更久远的数据参考价值有限，也减少每次下载量。
+_MAX_HISTORY_DAYS = 365 * 10 + 3
+
+
+def _effective_start(config: DataConfig) -> str:
+    """下载/保留窗口的起始日：不早于约 10 年前（在用户 start 与 10 年下限中取较晚者）。"""
+    floor = (datetime.now().date() - timedelta(days=_MAX_HISTORY_DAYS)).isoformat()
+    return max(config.start, floor) if config.start else floor
+
+
+def _trim_window(prices: pd.DataFrame, start: str) -> pd.DataFrame:
+    if prices.empty:
+        return prices
+    keep = pd.to_datetime(prices["date"]) >= pd.Timestamp(start)
+    return prices[keep].reset_index(drop=True)
+
+
 def _load_yfinance(config: DataConfig, force_refresh: bool = False) -> pd.DataFrame:
+    """Maintain a rolling per-universe price database: download only the user's symbols,
+    keep at most ~10 years, refresh at most once per local day, and on a new day fetch
+    only the missing dates and append them (no full re-download)."""
     if not config.universe:
         raise ValueError("data.universe cannot be empty")
     cache_path = _cache_path(config)
-    if cache_path.exists() and not force_refresh and not _cache_is_stale(config, cache_path):
-        return pd.read_csv(cache_path)
+    existing = pd.read_csv(cache_path) if cache_path.exists() else None
+
+    # Same-day (or still-fresh) cache: reuse as-is — never re-hit Yahoo for the same day.
+    if existing is not None and not force_refresh and not _cache_is_stale(config, cache_path):
+        return existing
+
+    window_start = _effective_start(config)  # never earlier than ~10 years ago
+    if existing is not None and not existing.empty and not force_refresh:
+        last = pd.to_datetime(existing["date"]).max().date()
+        download_start = max(window_start, (last + timedelta(days=1)).isoformat())  # only new dates
+    else:
+        download_start = window_start  # first build (or forced): the full 10y window
 
     try:
-        prices = _download_yfinance(config)
+        fresh = _download_yfinance(config, download_start)
     except Exception:
-        # Network/API failure: fall back to whatever cache we have rather than erroring.
-        if cache_path.exists():
-            return pd.read_csv(cache_path)
-        raise
+        fresh = pd.DataFrame()
+
+    if fresh.empty:
+        # No new trading data (weekend/holiday) or a transient Yahoo failure: keep the
+        # cached database and mark it checked-today so we don't keep hitting Yahoo.
+        if existing is not None and not existing.empty:
+            cache_path.touch()
+            return existing
+        raise ValueError("yfinance returned no data and no cache is available")
+
+    combined = pd.concat([existing, fresh], ignore_index=True) if existing is not None and not existing.empty else fresh
+    combined["date"] = pd.to_datetime(combined["date"]).dt.tz_localize(None)
+    combined = (
+        combined.drop_duplicates(["date", "symbol"], keep="last")  # newly fetched rows win
+        .sort_values(["symbol", "date"])
+        .reset_index(drop=True)
+    )
+    combined = _trim_window(combined, window_start)  # drop data older than the 10y window
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    prices.to_csv(cache_path, index=False)
-    return prices
+    combined.to_csv(cache_path, index=False)
+    return combined
 
 
 def _cache_is_stale(config: DataConfig, cache_path: Path) -> bool:
-    """Open-ended (end=null) caches expire after cache_ttl_hours; fixed ranges never do."""
+    """Refresh the open-ended (end=null) cache at most once per local calendar day.
+
+    A cache written today is always reused, so repeated same-day calls never re-hit
+    Yahoo (anti-scraping friendly). On a later day it refreshes once it is older than
+    ``cache_ttl_hours``. ``cache_ttl_hours=None`` or a fixed end date never expires.
+    """
     if config.cache_ttl_hours is None or config.end is not None:
         return False
-    age_hours = (time.time() - cache_path.stat().st_mtime) / 3600.0
+    mtime = cache_path.stat().st_mtime
+    if datetime.fromtimestamp(mtime).date() >= datetime.now().date():
+        return False  # written today — reuse, don't re-pull
+    age_hours = (time.time() - mtime) / 3600.0
     return age_hours >= config.cache_ttl_hours
 
 
-def _yf_download_retry(yf, symbol: str, config: DataConfig, attempts: int = 3) -> pd.DataFrame:
+def _yf_download_retry(yf, symbol: str, config: DataConfig, start: str | None, attempts: int = 3) -> pd.DataFrame:
     """单只下载，带指数退避重试，缓解网络抖动和 yfinance 限流（空返回）。"""
     last_exc: Exception | None = None
     for attempt in range(attempts):
         try:
             raw = yf.download(
-                symbol, start=config.start, end=config.end, auto_adjust=False, progress=False
+                symbol, start=start, end=config.end, auto_adjust=False, progress=False
             )
             if not raw.empty:
                 return raw
@@ -161,12 +214,12 @@ def _yf_download_retry(yf, symbol: str, config: DataConfig, attempts: int = 3) -
 _MAX_DOWNLOAD_WORKERS = 8
 
 
-def _download_one(yf, symbol: str, config: DataConfig) -> pd.DataFrame | None:
-    raw = _yf_download_retry(yf, symbol, config)
+def _download_one(yf, symbol: str, config: DataConfig, start: str | None) -> pd.DataFrame | None:
+    raw = _yf_download_retry(yf, symbol, config, start)
     if raw.empty:
         return None
     raw = raw.reset_index()
-    return pd.DataFrame(
+    frame = pd.DataFrame(
         {
             "date": raw["Date"],
             "symbol": symbol.upper(),
@@ -178,32 +231,31 @@ def _download_one(yf, symbol: str, config: DataConfig) -> pd.DataFrame | None:
             "volume": _column(raw, "Volume"),
         }
     )
+    # Drop incomplete rows — e.g. the latest, not-yet-settled session where Yahoo
+    # returns a NaN adj_close — so one unsettled row doesn't fail the whole load.
+    return frame.dropna(subset=["open", "high", "low", "close", "adj_close", "volume"])
 
 
-def _download_yfinance(config: DataConfig) -> pd.DataFrame:
+def _download_yfinance(config: DataConfig, start: str | None) -> pd.DataFrame:
     import yfinance as yf
 
     workers = max(1, min(_MAX_DOWNLOAD_WORKERS, len(config.universe)))
-    rows: list[pd.DataFrame] = []
     if workers == 1:
-        frames = [_download_one(yf, symbol, config) for symbol in config.universe]
+        frames = [_download_one(yf, symbol, config, start) for symbol in config.universe]
     else:
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            frames = list(executor.map(lambda s: _download_one(yf, s, config), config.universe))
+            frames = list(executor.map(lambda s: _download_one(yf, s, config, start), config.universe))
     rows = [frame for frame in frames if frame is not None and not frame.empty]
     if not rows:
-        raise ValueError("yfinance returned no data")
+        return pd.DataFrame()  # no new rows — caller reuses the cached database / decides
     return pd.concat(rows, ignore_index=True)
 
 
 def _cache_path(config: DataConfig) -> Path:
-    # 用排序后 universe 的哈希做 key：股票数量多时不会撑爆文件名/路径长度
-    # （Windows 上拼接全部 ticker 容易超过 260 字符上限），且与 ticker 顺序无关。
+    # 按排序后 universe 的哈希做 key（与 ticker 顺序无关，也不会撑爆 Windows 路径长度）。
+    # 不含起止日期：这是一个滚动累积的「数据库」文件，每天增量追加、并裁掉超过 10 年的旧数据。
     digest = hashlib.sha1("_".join(sorted(config.universe)).encode("utf-8")).hexdigest()[:16]
-    universe_key = f"{len(config.universe)}_{digest}"
-    start = config.start or "none"
-    end = config.end or "latest"
-    return config.cache_dir / f"prices_{universe_key}_{start}_{end}.csv"
+    return config.cache_dir / f"prices_{len(config.universe)}_{digest}.csv"
 
 
 def _column(frame: pd.DataFrame, name: str, fallback: str | None = None) -> pd.Series:
