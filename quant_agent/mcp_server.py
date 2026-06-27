@@ -29,12 +29,20 @@ from quant_agent.config import AppConfig, load_config
 from quant_agent.data import load_prices
 from quant_agent.data_quality import build_data_quality_report
 from quant_agent.features import build_signals
-from quant_agent.market_intel import _collect_feeds, build_market_report
+from quant_agent.market_intel import _collect_feeds, build_market_report, render_markdown
 from quant_agent.markets_data import build_markets_data
 from quant_agent.portfolio import build_target_positions
 from quant_agent.recommendations import RECOMMENDATION_PROFILES, build_recommendations
 
-mcp = FastMCP("quant_research_mcp")
+MCP_INSTRUCTIONS = (
+    "US-equity quant research tools (research only — never orders). "
+    "When the user asks for the daily market report, call quant_generate_market_report and present "
+    "the returned `report_markdown` to the user AS AN ARTIFACT — a Markdown document titled like "
+    "'美股当日报告 · <as_of_date>' (or 'US Market Report · <date>') — rather than only summarizing it "
+    "inline in chat. Keep the disclaimer at the end. You may add a short note before the artifact. "
+    "For the other tools, answer normally."
+)
+mcp = FastMCP("quant_research_mcp", instructions=MCP_INSTRUCTIONS)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # Default to the user's personal watchlist config so the tools only pull the symbols
@@ -239,18 +247,26 @@ async def quant_generate_market_report(params: ConfigInput) -> dict[str, Any]:
     into relatively-favorable research candidates vs elevated-risk names from price statistics, and
     includes the categorized quant candidates. Writes market_intel.{html,md,json} to the report dir.
 
+    Present the returned ``report_markdown`` to the user AS AN ARTIFACT (a titled Markdown
+    document), not just an inline chat summary. The structured fields are there for any
+    follow-up reasoning.
+
     Args:
         params (ConfigInput): config path relative to project root.
 
     Returns:
-        dict: { as_of_date, data_status, market_overview{}, buy_candidates[], high_risk[], quant_candidates{}, news[], warnings[], disclaimer }
-        (full report; the HTML/MD/JSON files are also written to the configured report dir)
+        dict: { display:"artifact", report_markdown (render this as the artifact), as_of_date,
+        data_status, market_overview{}, buy_candidates[], high_risk[], quant_candidates{}, news[],
+        warnings[], disclaimer }
+        (the HTML/MD/JSON files are also written to the configured report dir)
     """
     try:
         config = _load(params.config)
         await _prewarm(config, params.refresh)
         report = await asyncio.to_thread(build_market_report, config)
         return {
+            "display": "artifact",  # client hint: render report_markdown as a Markdown artifact
+            "report_markdown": render_markdown(report),
             "as_of_date": report.get("as_of_date"),
             "data_status": report.get("data_status"),
             "market_overview": report.get("market_overview", {}),
