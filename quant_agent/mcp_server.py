@@ -18,6 +18,7 @@ Run locally over stdio:
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -30,15 +31,15 @@ from quant_agent.data_quality import build_data_quality_report
 from quant_agent.features import build_signals
 from quant_agent.market_intel import _collect_feeds, build_market_report
 from quant_agent.markets_data import build_markets_data
-from quant_agent.ml import apply_ml_ranking_signal
-from quant_agent.pipeline import run_research_backtest
 from quant_agent.portfolio import build_target_positions
 from quant_agent.recommendations import RECOMMENDATION_PROFILES, build_recommendations
 
 mcp = FastMCP("quant_research_mcp")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = "configs/full_roadmap.yaml"
+# Default to the user's personal watchlist config so the tools only pull the symbols
+# they care about. Falls back to the committed full_roadmap.yaml if it's absent.
+DEFAULT_CONFIG = "configs/my.yaml" if (PROJECT_ROOT / "configs/my.yaml").exists() else "configs/full_roadmap.yaml"
 DISCLAIMER = "Research only. Not investment advice; no live-trading authorization."
 
 
@@ -203,6 +204,9 @@ async def quant_get_recommendations(params: RecommendationsInput) -> dict[str, A
     try:
         config = _load(params.config)
         await _prewarm(config, params.refresh)
+        # Deferred to call time: scikit-learn is only needed by the ML ranking, so the
+        # stdio server boots (and the sklearn-free tools work) without loading it.
+        from quant_agent.ml import apply_ml_ranking_signal
 
         def _compute() -> dict[str, Any]:
             prices = load_prices(config.data)
@@ -311,6 +315,9 @@ async def quant_run_backtest(params: ConfigInput) -> dict[str, Any]:
     try:
         config = _load(params.config)
         await _prewarm(config, params.refresh)
+        # Deferred to call time (the pipeline pulls in scikit-learn via ML ranking).
+        from quant_agent.pipeline import run_research_backtest
+
         result = await asyncio.to_thread(run_research_backtest, config)
         metrics = result.get("metrics", {}) if isinstance(result, dict) else {}
         return {"output_dir": str(config.report.output_dir), "metrics": metrics, "disclaimer": DISCLAIMER}
@@ -331,7 +338,7 @@ async def quant_data_quality(params: ConfigInput) -> dict[str, Any]:
         params (ConfigInput): config path relative to project root.
 
     Returns:
-        dict: { "summary": {...}, "issues_by_symbol": [...] } (structure from build_data_quality_report)
+        dict: { "summary": {...}, "issues": [...], "by_symbol": [ {symbol, rows, first_date, last_date, ...} ] }
     """
     try:
         config = _load(params.config)
@@ -340,7 +347,19 @@ async def quant_data_quality(params: ConfigInput) -> dict[str, Any]:
         def _compute() -> dict[str, Any]:
             prices = load_prices(config.data)
             report = build_data_quality_report(prices, config.data.universe)
-            return {"summary": report.get("summary", {}), "checks": report.get("checks", report)}
+            # symbol_summary is a DataFrame; round-trip through to_json so dates/numpy
+            # types become JSON-native before the MCP layer serializes the result.
+            summary_df = report.get("symbol_summary")
+            by_symbol = (
+                json.loads(summary_df.to_json(orient="records", date_format="iso"))
+                if summary_df is not None and hasattr(summary_df, "to_json")
+                else []
+            )
+            return {
+                "summary": report.get("summary", {}),
+                "issues": report.get("issues", []),
+                "by_symbol": by_symbol,
+            }
 
         return await asyncio.to_thread(_compute)
     except Exception as exc:
