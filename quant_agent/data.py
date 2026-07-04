@@ -132,7 +132,9 @@ def _trim_window(prices: pd.DataFrame, start: str) -> pd.DataFrame:
 def _load_yfinance(config: DataConfig, force_refresh: bool = False) -> pd.DataFrame:
     """Maintain a rolling per-universe price database: download only the user's symbols,
     keep at most ~10 years, refresh at most once per local day, and on a new day fetch
-    only the missing dates and append them (no full re-download)."""
+    only the missing dates and append them (no full re-download). When the universe
+    changes (new cache key, e.g. a watchlist edit), seed history from sibling cache
+    files and download only the genuinely missing symbols/dates."""
     if not config.universe:
         raise ValueError("data.universe cannot be empty")
     cache_path = _cache_path(config)
@@ -143,14 +145,16 @@ def _load_yfinance(config: DataConfig, force_refresh: bool = False) -> pd.DataFr
         return existing
 
     window_start = _effective_start(config)  # never earlier than ~10 years ago
+    if existing is None and not force_refresh:
+        # Universe 变了（新的缓存键）：从旧缓存播种交集标的的历史，只补缺口，不整库重下。
+        existing = _seed_from_sibling_caches(config, window_start)
+
+    start_by_symbol: dict[str, str] | None = None
     if existing is not None and not existing.empty and not force_refresh:
-        last = pd.to_datetime(existing["date"]).max().date()
-        download_start = max(window_start, (last + timedelta(days=1)).isoformat())  # only new dates
-    else:
-        download_start = window_start  # first build (or forced): the full 10y window
+        start_by_symbol = _incremental_starts(existing, config.universe, window_start)
 
     try:
-        fresh = _download_yfinance(config, download_start)
+        fresh = _download_yfinance(config, window_start, start_by_symbol)
     except Exception:
         fresh = pd.DataFrame()
 
@@ -158,7 +162,10 @@ def _load_yfinance(config: DataConfig, force_refresh: bool = False) -> pd.DataFr
         # No new trading data (weekend/holiday) or a transient Yahoo failure: keep the
         # cached database and mark it checked-today so we don't keep hitting Yahoo.
         if existing is not None and not existing.empty:
-            cache_path.touch()
+            if cache_path.exists():
+                cache_path.touch()
+            else:
+                _write_cache(existing, cache_path)  # 播种结果落地为本 universe 的数据库
             return existing
         raise ValueError("yfinance returned no data and no cache is available")
 
@@ -170,9 +177,63 @@ def _load_yfinance(config: DataConfig, force_refresh: bool = False) -> pd.DataFr
         .reset_index(drop=True)
     )
     combined = _trim_window(combined, window_start)  # drop data older than the 10y window
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    combined.to_csv(cache_path, index=False)
+    _write_cache(combined, cache_path)
     return combined
+
+
+def _write_cache(frame: pd.DataFrame, cache_path: Path) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(cache_path, index=False)
+
+
+def _seed_from_sibling_caches(config: DataConfig, window_start: str) -> pd.DataFrame | None:
+    """Reuse history for this universe's symbols from other cache files (newest first).
+
+    自选池增删会改变缓存键；没有播种的话，加一只股票就要整个 universe 全量重下 10 年。
+    """
+    if not config.cache_dir.exists():
+        return None
+    own = _cache_path(config).name
+    candidates = sorted(
+        (path for path in config.cache_dir.glob("prices_*.csv") if path.name != own),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    wanted = set(config.universe)
+    frames: list[pd.DataFrame] = []
+    for path in candidates:
+        try:
+            frame = pd.read_csv(path)
+        except Exception:
+            continue
+        if any(column not in frame.columns for column in PRICE_COLUMNS):
+            continue
+        subset = frame[frame["symbol"].astype(str).str.upper().isin(wanted)][PRICE_COLUMNS]
+        if not subset.empty:
+            frames.append(subset)
+    if not frames:
+        return None
+    seeded = pd.concat(frames, ignore_index=True)
+    seeded["date"] = pd.to_datetime(seeded["date"]).dt.tz_localize(None)
+    seeded = (
+        seeded.drop_duplicates(["date", "symbol"], keep="first")  # 文件按 mtime 新→旧，先见者（新文件）优先
+        .sort_values(["symbol", "date"])
+        .reset_index(drop=True)
+    )
+    return _trim_window(seeded, window_start)
+
+
+def _incremental_starts(existing: pd.DataFrame, universe: list[str], window_start: str) -> dict[str, str]:
+    """Per-symbol download start: symbols with history resume at last date + 1; new symbols get the full window."""
+    last_by_symbol = pd.to_datetime(existing["date"]).groupby(existing["symbol"]).max()
+    starts: dict[str, str] = {}
+    for symbol in universe:
+        last = last_by_symbol.get(symbol)
+        if last is None or pd.isna(last):
+            starts[symbol] = window_start
+        else:
+            starts[symbol] = max(window_start, (last.date() + timedelta(days=1)).isoformat())
+    return starts
 
 
 def _cache_is_stale(config: DataConfig, cache_path: Path) -> bool:
@@ -236,15 +297,26 @@ def _download_one(yf, symbol: str, config: DataConfig, start: str | None) -> pd.
     return frame.dropna(subset=["open", "high", "low", "close", "adj_close", "volume"])
 
 
-def _download_yfinance(config: DataConfig, start: str | None) -> pd.DataFrame:
+def _download_yfinance(
+    config: DataConfig, start: str | None, start_by_symbol: dict[str, str] | None = None
+) -> pd.DataFrame:
     import yfinance as yf
+
+    starts = start_by_symbol or {}
+    today = datetime.now().date().isoformat()
+
+    def _fetch(symbol: str) -> pd.DataFrame | None:
+        symbol_start = starts.get(symbol, start)
+        if symbol_start is not None and symbol_start > today:
+            return None  # 该标的已最新（起点在未来），无需请求
+        return _download_one(yf, symbol, config, symbol_start)
 
     workers = max(1, min(_MAX_DOWNLOAD_WORKERS, len(config.universe)))
     if workers == 1:
-        frames = [_download_one(yf, symbol, config, start) for symbol in config.universe]
+        frames = [_fetch(symbol) for symbol in config.universe]
     else:
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            frames = list(executor.map(lambda s: _download_one(yf, s, config, start), config.universe))
+            frames = list(executor.map(_fetch, config.universe))
     rows = [frame for frame in frames if frame is not None and not frame.empty]
     if not rows:
         return pd.DataFrame()  # no new rows — caller reuses the cached database / decides

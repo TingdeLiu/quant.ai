@@ -68,6 +68,76 @@ def test_local_directory_loads_multiple_price_files_and_infers_symbol(tmp_path: 
     assert len(loaded) == 990
 
 
+def test_yfinance_seeds_from_sibling_cache_and_downloads_gap(tmp_path: Path, monkeypatch) -> None:
+    """Universe 变化（新缓存键）时：老标的从旧缓存播种并按 last+1 增量，新标的才走全量窗口。"""
+    from _helpers import _trending_prices
+
+    from quant_agent import data as data_mod
+    from quant_agent.config import DataConfig
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    sibling = _synthetic_prices()[lambda f: f["symbol"].isin(["AAA", "SPY"])]
+    sibling.to_csv(cache_dir / "prices_2_deadbeef0000.csv", index=False)
+    last_aaa = pd.to_datetime(sibling["date"]).max().date()
+
+    cfg = DataConfig(
+        source="yfinance", start="2022-01-01", end=None, cache_dir=cache_dir, universe=["AAA", "NEW", "SPY"]
+    )
+
+    captured: dict = {}
+
+    def fake_download(config, start, start_by_symbol=None):
+        captured["start"] = start
+        captured["by_symbol"] = start_by_symbol
+        return _trending_prices("NEW", 0.001, periods=200)
+
+    monkeypatch.setattr(data_mod, "_download_yfinance", fake_download)
+    out = data_mod._load_yfinance(cfg)
+
+    from datetime import timedelta
+
+    assert captured["by_symbol"]["AAA"] == (last_aaa + timedelta(days=1)).isoformat()
+    assert captured["by_symbol"]["NEW"] == "2022-01-01"  # 播种没有的新标的：完整窗口
+    assert sorted(out["symbol"].unique()) == ["AAA", "NEW", "SPY"]
+    assert len(out[out["symbol"] == "AAA"]) == 330  # 播种历史完整保留
+    assert data_mod._cache_path(cfg).exists()  # 滚动库落地到新缓存键
+
+
+def test_yfinance_seed_persists_when_no_new_data(tmp_path: Path, monkeypatch) -> None:
+    from quant_agent import data as data_mod
+    from quant_agent.config import DataConfig
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _synthetic_prices().to_csv(cache_dir / "prices_4_deadbeef0000.csv", index=False)
+
+    cfg = DataConfig(source="yfinance", start="2022-01-01", end=None, cache_dir=cache_dir, universe=["AAA", "SPY"])
+    monkeypatch.setattr(data_mod, "_download_yfinance", lambda *a, **k: pd.DataFrame())
+    out = data_mod._load_yfinance(cfg)
+
+    assert sorted(out["symbol"].unique()) == ["AAA", "SPY"]
+    assert data_mod._cache_path(cfg).exists()  # 即使无新数据，播种结果也持久化
+
+
+def test_download_skips_symbols_already_current(monkeypatch) -> None:
+    """增量起点在未来（已最新）的标的不发起请求。"""
+    from quant_agent import data as data_mod
+    from quant_agent.config import DataConfig
+
+    calls: list[str] = []
+
+    def fake_one(yf, symbol, config, start):
+        calls.append(symbol)
+        return None
+
+    monkeypatch.setattr(data_mod, "_download_one", fake_one)
+    cfg = DataConfig(source="yfinance", start="2024-01-01", end=None, cache_dir=Path("."), universe=["AAA", "BBB"])
+    out = data_mod._download_yfinance(cfg, "2024-01-01", {"AAA": "2999-01-01", "BBB": "2024-01-01"})
+    assert calls == ["BBB"]
+    assert out.empty
+
+
 def test_yf_download_retry_recovers_after_transient_errors(monkeypatch) -> None:
     from quant_agent import data as data_mod
     from quant_agent.config import DataConfig
