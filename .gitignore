@@ -16,6 +16,9 @@ configs/my_universe.csv
 configs/my.yaml
 configs/profile.json
 
+# 聊天管理的自选与持仓（个人数据，不入库）
+data/portfolio.json
+
 # 本地 Claude Code 设置与运行期产物（个人化，不入库）
 .claude/settings.local.json
 .claude/*.lock

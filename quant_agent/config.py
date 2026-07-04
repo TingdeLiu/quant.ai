@@ -181,6 +181,8 @@ class AppConfig:
     alerts: AlertConfig
     notifications: NotificationConfig
     approvals: ApprovalConfig
+    # 聊天管理的自选/持仓存储（data/portfolio.json），叠加进 universe，不入库。
+    portfolio_path: Path = Path("data/portfolio.json")
     language: str = "en"
 
 
@@ -232,6 +234,7 @@ def parse_config(raw: dict[str, Any], base: Path | None = None) -> AppConfig:
     alerts = raw.get("alerts", {})
     notifications = raw.get("notifications", {})
     approvals = raw.get("approvals", {})
+    portfolio = raw.get("portfolio", {}) or {}
 
     source = str(data.get("source", "yfinance")).lower()
     path = data.get("path")
@@ -371,6 +374,7 @@ def parse_config(raw: dict[str, Any], base: Path | None = None) -> AppConfig:
             require_manual_paper_approval=bool(approvals.get("require_manual_paper_approval", True)),
             allow_broker_submit_after_approval=bool(approvals.get("allow_broker_submit_after_approval", False)),
         ),
+        portfolio_path=_resolve_path(base, portfolio.get("path", "data/portfolio.json")),
         language=normalize_language(raw.get("language", "en")),
     )
 

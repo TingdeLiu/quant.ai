@@ -126,6 +126,15 @@ def test_optional_roadmap_configs_are_parsed(tmp_path: Path) -> None:
     assert config.approvals.require_manual_paper_approval
 
 
+def test_portfolio_path_defaults_and_overrides(tmp_path: Path) -> None:
+    base_raw = {"data": {"source": "csv", "csv_path": str(tmp_path / "prices.csv"), "universe": ["SPY"]}}
+    config = parse_config(base_raw, base=tmp_path)
+    assert config.portfolio_path == tmp_path / "data/portfolio.json"
+
+    config = parse_config({**base_raw, "portfolio": {"path": "state/pf.json"}}, base=tmp_path)
+    assert config.portfolio_path == tmp_path / "state/pf.json"
+
+
 def test_write_recommended_config(tmp_path: Path) -> None:
     base = tmp_path / "base.yaml"
     weights = tmp_path / "weights.json"
