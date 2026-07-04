@@ -614,7 +614,7 @@ quant_read_report             读取单个报告文件
 claude mcp add quant-research -- "<你的 conda 环境>\python.exe" -m quant_agent.mcp_server
 ```
 
-注册后即可直接对 Claude 说「看看 NVDA 的研究解读」「今天有哪些适合长线的候选」「生成今日美股简报」，Claude 会调用对应工具、拿到项目真实量化数据再做分析。所有结论均为研究信号，不构成投资建议。
+注册后即可直接对 Claude 说「看看 NVDA 的研究解读」「帮我关注特斯拉」「我 182.5 买了 15 股苹果」「今天有哪些适合长线的候选」「生成今日美股简报」，Claude 会调用对应工具、拿到项目真实量化数据（含你的自选与持仓）再做分析。所有结论均为研究信号，不构成投资建议。
 
 数据时效：价格数据缓存超过 `data.cache_ttl_hours`（默认 6 小时）会自动刷新到最新交易日，所以正常调用就是当前数据。若想强制立即拉取最新，可让 Claude 在调用时带上 `refresh: true`（如「刷新数据后生成今日简报」），相关工具会忽略缓存重新下载。
 
@@ -834,8 +834,6 @@ alerts.json                                     告警
 notifications.json                              通知记录
 proposed_orders.csv                             纸面订单计划
 paper_trading_audit.json                        纸面订单风控审计
-paper_order_approval.json                       审批结果
-broker_preview.csv                              PaperBroker 预览
 dashboard.html                                  静态 dashboard
 runtime_status.json                             本地服务运行状态
 run_history.json                                本地服务运行历史
@@ -889,8 +887,8 @@ python -m compileall -q quant_agent tests
 - 还没有完整基本面、新闻、财报电话会或 SEC filing 数据。
 - 当前回测是研究级 close-to-close 模型，不是生产级事件驱动撮合。
 - ML ranking 是基础版，没有模型注册中心、特征存储服务或漂移监控。
-- LLM 审阅是基础版，没有多 provider 路由和完整人工审批工作流。
-- PaperBroker 是模拟器，没有接入真实 broker API、完整订单生命周期或自动持仓对账。
+- LLM 审阅是基础版，没有多 provider 路由。
+- 纸面订单计划是研究模拟，项目按定位不接入任何 broker API 或下单/审批链路。
 - Dashboard 已有本地 API token 认证和操作审计，但不是多用户权限系统。
 - 通知 outbox 和 webhook 是基础版，没有生产级投递重试、签名校验和告警升级策略。
 
