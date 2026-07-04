@@ -172,10 +172,12 @@ def write_market_report(report: dict[str, Any], output_dir: Path) -> dict[str, P
     json_path = output_dir / "market_intel.json"
     md_path = output_dir / "market_intel.md"
     html_path = output_dir / "market_intel.html"
+    artifact_path = output_dir / "market_intel_artifact.html"
     json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     md_path.write_text(render_markdown(report), encoding="utf-8")
     html_path.write_text(render_html(report), encoding="utf-8")
-    return {"json": json_path, "markdown": md_path, "html": html_path}
+    artifact_path.write_text(render_artifact_html(report), encoding="utf-8")
+    return {"json": json_path, "markdown": md_path, "html": html_path, "artifact": artifact_path}
 
 
 # ---------------------------------------------------------------------------
@@ -838,127 +840,180 @@ _FONT_LINK = (
     "family=JetBrains+Mono:wght@400;500;700&display=swap\" rel=\"stylesheet\">"
 )
 
-_REPORT_CSS = """
-:root {
-  --paper: #faf9f5; --card: #ffffff; --sand: #f1efe6; --sand-2: #e8e6dc;
-  --line: #e3e0d4; --line-2: #d6d3c5;
-  --ink: #141413; --ink-soft: #34322c; --muted: #6f6d62; --faint: #9a988c;
-  --orange: #d97757; --orange-deep: #c25e3f; --orange-soft: #f3e0d7;
-  --blue: #6a9bcc; --green: #788c5d; --down: #c25e3f;
-  --head: "Poppins", "Noto Sans SC", -apple-system, "Segoe UI", sans-serif;
-  --body: "Lora", "Noto Serif SC", Georgia, serif;
-  --mono: "JetBrains Mono", ui-monospace, monospace;
-}
-* { box-sizing: border-box; }
+_CSS_PALETTE_LIGHT = (
+    "--paper:#faf9f5;--card:#ffffff;--sand:#f1efe6;--sand-2:#e8e6dc;"
+    "--line:#e3e0d4;--line-2:#d6d3c5;"
+    "--ink:#141413;--ink-soft:#34322c;--muted:#6f6d62;--faint:#9a988c;"
+    "--orange:#d97757;--orange-deep:#c25e3f;--orange-soft:#f3e0d7;"
+    "--blue:#6a9bcc;--green:#788c5d;--down:#c25e3f;"
+)
+
+_CSS_PALETTE_DARK = (
+    "--paper:#1f1e1a;--card:#262521;--sand:#2d2b25;--sand-2:#35332c;"
+    "--line:#3a3830;--line-2:#4a4738;"
+    "--ink:#f0efe9;--ink-soft:#d6d4ca;--muted:#a3a193;--faint:#7b796d;"
+    "--orange:#e08b6d;--orange-deep:#d97757;--orange-soft:#4a2f24;"
+    "--blue:#7fabd6;--green:#96a97a;--down:#e2836a;"
+)
+
+_CSS_FONTS_WEB = (
+    '--head:"Poppins","Noto Sans SC",-apple-system,"Segoe UI",sans-serif;'
+    '--body:"Lora","Noto Serif SC",Georgia,serif;'
+    '--mono:"JetBrains Mono",ui-monospace,monospace;'
+)
+
+# Artifact 片段禁止外部资源（严格 CSP），用系统字体栈近似同一气质。
+_CSS_FONTS_SYSTEM = (
+    '--head:-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;'
+    '--body:Georgia,"Iowan Old Style","Songti SC",SimSun,serif;'
+    '--mono:ui-monospace,"Cascadia Code",Consolas,Menlo,monospace;'
+)
+
+# 仅整页文档使用（body 背景、外层容器）；artifact 片段不注入全局规则。
+_CSS_PAGE = """
 html { scroll-behavior: smooth; }
 body {
-  margin: 0; color: var(--ink); font-family: var(--body); line-height: 1.65; font-size: 15px;
+  margin: 0;
   background:
     radial-gradient(1200px 620px at 82% -8%, rgba(217,119,87,0.08), transparent 62%),
     radial-gradient(900px 500px at -5% 4%, rgba(106,155,204,0.06), transparent 58%),
     var(--paper);
   background-attachment: fixed;
-  -webkit-font-smoothing: antialiased;
 }
 .wrap { position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 0 26px 80px; }
+"""
+
+# 组件样式：整页与 artifact 片段共用，全部作用域在 .qa-report 之下。
+_CSS_COMPONENTS = """
+.qa-report, .qa-report * { box-sizing: border-box; }
+.qa-report { color: var(--ink); font-family: var(--body); line-height: 1.65; font-size: 15px; -webkit-font-smoothing: antialiased; }
 
 /* Masthead */
-header { padding: 56px 0 26px; border-bottom: 1px solid var(--line-2); }
-.kicker { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--orange-deep); margin-bottom: 18px; }
-.kicker::before { content: "✦ "; color: var(--orange); }
-h1.title { font-family: var(--head); font-weight: 700; font-size: clamp(34px, 5.6vw, 58px); line-height: 1.06; letter-spacing: -0.01em; margin: 0; color: var(--ink); }
-.title .en { display: block; font-family: var(--body); font-style: italic; font-weight: 400; font-size: clamp(15px, 2vw, 20px); color: var(--muted); letter-spacing: 0.01em; margin-top: 14px; }
-.metabar { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
-.pill { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.03em; color: var(--ink-soft); border: 1px solid var(--line-2); border-radius: 999px; padding: 6px 13px; background: var(--card); }
-.pill b { color: var(--orange-deep); font-weight: 700; }
-.pill.ok b { color: var(--green); } .pill.bad b { color: var(--down); }
+.qa-report header { padding: 56px 0 26px; border-bottom: 1px solid var(--line-2); }
+.qa-report .kicker { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--orange-deep); margin-bottom: 18px; }
+.qa-report .kicker::before { content: "✦ "; color: var(--orange); }
+.qa-report h1.title { font-family: var(--head); font-weight: 700; font-size: clamp(34px, 5.6vw, 58px); line-height: 1.06; letter-spacing: -0.01em; margin: 0; color: var(--ink); }
+.qa-report .title .en { display: block; font-family: var(--body); font-style: italic; font-weight: 400; font-size: clamp(15px, 2vw, 20px); color: var(--muted); letter-spacing: 0.01em; margin-top: 14px; }
+.qa-report .metabar { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+.qa-report .pill { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.03em; color: var(--ink-soft); border: 1px solid var(--line-2); border-radius: 999px; padding: 6px 13px; background: var(--card); }
+.qa-report .pill b { color: var(--orange-deep); font-weight: 700; }
+.qa-report .pill.ok b { color: var(--green); } .qa-report .pill.bad b { color: var(--down); }
 
 /* Disclaimer */
-.ribbon { display: flex; gap: 12px; align-items: flex-start; margin: 28px 0 6px; padding: 14px 17px; border: 1px solid var(--line); border-left: 3px solid var(--orange); background: linear-gradient(90deg, var(--orange-soft), rgba(243,224,215,0.18)); border-radius: 0 10px 10px 0; font-size: 13px; color: var(--ink-soft); }
-.ribbon::before { content: "✦"; color: var(--orange); font-family: var(--mono); }
+.qa-report .ribbon { display: flex; gap: 12px; align-items: flex-start; margin: 28px 0 6px; padding: 14px 17px; border: 1px solid var(--line); border-left: 3px solid var(--orange); background: linear-gradient(90deg, var(--orange-soft), transparent); border-radius: 0 10px 10px 0; font-size: 13px; color: var(--ink-soft); }
+.qa-report .ribbon::before { content: "✦"; color: var(--orange); font-family: var(--mono); }
 
 /* Sections */
-section { margin-top: 48px; opacity: 0; transform: translateY(16px); animation: rise 0.7s cubic-bezier(.2,.7,.2,1) forwards; }
-section:nth-of-type(1){animation-delay:.05s} section:nth-of-type(2){animation-delay:.12s} section:nth-of-type(3){animation-delay:.19s} section:nth-of-type(4){animation-delay:.26s} section:nth-of-type(5){animation-delay:.33s} section:nth-of-type(6){animation-delay:.40s} section:nth-of-type(n+7){animation-delay:.45s}
-@keyframes rise { to { opacity: 1; transform: none; } }
-.sec-head { display: flex; align-items: baseline; gap: 13px; margin-bottom: 22px; }
-.sec-num { font-family: var(--mono); font-size: 12px; color: var(--orange); letter-spacing: 0.08em; font-weight: 500; }
-h2 { font-family: var(--head); font-weight: 600; font-size: 23px; margin: 0; color: var(--ink); letter-spacing: -0.01em; }
-.sec-head .hint { font-size: 12px; color: var(--faint); margin-left: auto; font-family: var(--mono); }
+.qa-report section { margin-top: 48px; opacity: 0; transform: translateY(16px); animation: qa-rise 0.7s cubic-bezier(.2,.7,.2,1) forwards; }
+.qa-report section:nth-of-type(1){animation-delay:.05s} .qa-report section:nth-of-type(2){animation-delay:.12s} .qa-report section:nth-of-type(3){animation-delay:.19s} .qa-report section:nth-of-type(4){animation-delay:.26s} .qa-report section:nth-of-type(5){animation-delay:.33s} .qa-report section:nth-of-type(6){animation-delay:.40s} .qa-report section:nth-of-type(n+7){animation-delay:.45s}
+@keyframes qa-rise { to { opacity: 1; transform: none; } }
+.qa-report .sec-head { display: flex; align-items: baseline; gap: 13px; margin-bottom: 22px; }
+.qa-report .sec-num { font-family: var(--mono); font-size: 12px; color: var(--orange); letter-spacing: 0.08em; font-weight: 500; }
+.qa-report h2 { font-family: var(--head); font-weight: 600; font-size: 23px; margin: 0; color: var(--ink); letter-spacing: -0.01em; }
+.qa-report .sec-head .hint { font-size: 12px; color: var(--faint); margin-left: auto; font-family: var(--mono); }
 
 /* Stat tiles */
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
-.tile { background: var(--card); padding: 18px 18px 16px; }
-.tile .t-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
-.tile .t-value { font-family: var(--mono); font-size: 27px; font-weight: 700; margin-top: 8px; color: var(--ink); }
+.qa-report .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.qa-report .tile { background: var(--card); padding: 18px 18px 16px; }
+.qa-report .tile .t-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.qa-report .tile .t-value { font-family: var(--mono); font-size: 27px; font-weight: 700; margin-top: 8px; color: var(--ink); }
 
 /* Recommendation columns */
-.reco-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 16px; }
-.reco { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 0 0 6px; overflow: hidden; box-shadow: 0 1px 2px rgba(20,20,19,0.03); }
-.reco-top { padding: 17px 18px 14px; border-bottom: 1px solid var(--line); position: relative; }
-.reco-top::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, var(--orange), var(--orange-soft)); }
-.reco-name { font-family: var(--head); font-weight: 600; font-size: 19px; color: var(--ink); }
-.reco-meta { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
-.chip { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--orange-soft); background: var(--orange-soft); color: var(--orange-deep); }
-.reco-tag { font-size: 11px; color: var(--faint); font-family: var(--mono); }
-.pick { padding: 13px 18px; border-bottom: 1px solid var(--sand); }
-.pick:last-child { border-bottom: 0; }
-.pick-row { display: flex; align-items: center; gap: 10px; }
-.rank { font-family: var(--mono); font-size: 11px; color: var(--faint); width: 16px; }
-.ticker { font-family: var(--mono); font-weight: 700; font-size: 16px; color: var(--ink); letter-spacing: 0.01em; }
-.price { margin-left: auto; font-family: var(--mono); font-size: 13px; color: var(--muted); }
-.bar { height: 5px; border-radius: 3px; background: var(--sand-2); margin: 10px 0 7px; overflow: hidden; }
-.bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--orange-deep), var(--orange)); border-radius: 3px; }
-.pick .why { font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
+.qa-report .reco-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 16px; }
+.qa-report .reco { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 0 0 6px; overflow: hidden; box-shadow: 0 1px 2px rgba(20,20,19,0.03); }
+.qa-report .reco-top { padding: 17px 18px 14px; border-bottom: 1px solid var(--line); position: relative; }
+.qa-report .reco-top::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, var(--orange), var(--orange-soft)); }
+.qa-report .reco-name { font-family: var(--head); font-weight: 600; font-size: 19px; color: var(--ink); }
+.qa-report .reco-meta { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.qa-report .chip { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--orange-soft); background: var(--orange-soft); color: var(--orange-deep); }
+.qa-report .reco-tag { font-size: 11px; color: var(--faint); font-family: var(--mono); }
+.qa-report .pick { padding: 13px 18px; border-bottom: 1px solid var(--sand); }
+.qa-report .pick:last-child { border-bottom: 0; }
+.qa-report .pick-row { display: flex; align-items: center; gap: 10px; }
+.qa-report .rank { font-family: var(--mono); font-size: 11px; color: var(--faint); width: 16px; }
+.qa-report .ticker { font-family: var(--mono); font-weight: 700; font-size: 16px; color: var(--ink); letter-spacing: 0.01em; }
+.qa-report .price { margin-left: auto; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.qa-report .bar { height: 5px; border-radius: 3px; background: var(--sand-2); margin: 10px 0 7px; overflow: hidden; }
+.qa-report .bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--orange-deep), var(--orange)); border-radius: 3px; }
+.qa-report .pick .why { font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
 
-/* Data tables (buy / risk) */
-.panel { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--card); }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-thead th { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 13px 16px; background: var(--sand); border-bottom: 1px solid var(--line); }
-tbody td { padding: 13px 16px; border-bottom: 1px solid var(--sand); vertical-align: middle; }
-tbody tr:last-child td { border-bottom: 0; }
-tbody tr:hover td { background: var(--sand); }
-td.sym { font-family: var(--mono); font-weight: 700; font-size: 15px; }
-.buy td.sym { color: var(--green); } .risk td.sym { color: var(--down); }
-td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.why-cell { color: var(--muted); font-size: 12.5px; max-width: 320px; }
-.pos { color: var(--green); } .neg { color: var(--down); } .flat { color: var(--muted); } .muted { color: var(--faint); }
+/* Data tables (holdings / buy / risk) */
+.qa-report .panel { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--card); }
+.qa-report .panel { overflow-x: auto; }
+.qa-report table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.qa-report thead th { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 13px 16px; background: var(--sand); border-bottom: 1px solid var(--line); }
+.qa-report tbody td { padding: 13px 16px; border-bottom: 1px solid var(--sand); vertical-align: middle; }
+.qa-report tbody tr:last-child td { border-bottom: 0; }
+.qa-report tbody tr:hover td { background: var(--sand); }
+.qa-report td.sym { font-family: var(--mono); font-weight: 700; font-size: 15px; }
+.qa-report .buy td.sym { color: var(--green); } .qa-report .risk td.sym { color: var(--down); }
+.qa-report .holdings td.sym { color: var(--orange-deep); }
+.qa-report td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.qa-report .why-cell { color: var(--muted); font-size: 12.5px; max-width: 320px; }
+.qa-report .pos { color: var(--green); } .qa-report .neg { color: var(--down); } .qa-report .flat { color: var(--muted); } .qa-report .muted { color: var(--faint); }
 
 /* Narrative */
-.narrative { background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--orange); border-radius: 0 14px 14px 0; padding: 20px 24px; white-space: pre-wrap; line-height: 1.9; font-size: 15px; color: var(--ink-soft); }
+.qa-report .narrative { background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--orange); border-radius: 0 14px 14px 0; padding: 20px 24px; white-space: pre-wrap; line-height: 1.9; font-size: 15px; color: var(--ink-soft); }
 
 /* News */
-.news-list { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
-.news-item { background: var(--card); padding: 14px 17px; display: flex; gap: 14px; align-items: baseline; transition: background .15s; }
-.news-item:hover { background: var(--sand); }
-.src { flex: none; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.03em; color: var(--orange-deep); border: 1px solid var(--orange-soft); background: var(--orange-soft); border-radius: 6px; padding: 3px 8px; min-width: 100px; text-align: center; }
-.news-item a, .news-item .h { color: var(--ink); text-decoration: none; font-size: 14.5px; }
-.news-item a:hover { color: var(--orange-deep); text-decoration: underline; }
-.news-item time { margin-left: auto; flex: none; font-family: var(--mono); font-size: 11px; color: var(--faint); white-space: nowrap; }
+.qa-report .news-list { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.qa-report .news-item { background: var(--card); padding: 14px 17px; display: flex; gap: 14px; align-items: baseline; transition: background .15s; }
+.qa-report .news-item:hover { background: var(--sand); }
+.qa-report .src { flex: none; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.03em; color: var(--orange-deep); border: 1px solid var(--orange-soft); background: var(--orange-soft); border-radius: 6px; padding: 3px 8px; min-width: 100px; text-align: center; }
+.qa-report .news-item a, .qa-report .news-item .h { color: var(--ink); text-decoration: none; font-size: 14.5px; }
+.qa-report .news-item a:hover { color: var(--orange-deep); text-decoration: underline; }
+.qa-report .news-item time { margin-left: auto; flex: none; font-family: var(--mono); font-size: 11px; color: var(--faint); white-space: nowrap; }
 
 /* Company news */
-.co-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
-.co { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
-.co h3 { font-family: var(--mono); font-size: 14px; color: var(--orange-deep); margin: 0 0 10px; letter-spacing: 0.03em; font-weight: 700; }
-.co ul { margin: 0; padding: 0; list-style: none; }
-.co li { padding: 8px 0; border-top: 1px solid var(--sand); font-size: 13.5px; }
-.co li:first-child { border-top: 0; }
-.co a { color: var(--ink); text-decoration: none; } .co a:hover { color: var(--orange-deep); }
-.co .pub { color: var(--faint); font-size: 11px; font-family: var(--mono); }
+.qa-report .co-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.qa-report .co { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+.qa-report .co h3 { font-family: var(--mono); font-size: 14px; color: var(--orange-deep); margin: 0 0 10px; letter-spacing: 0.03em; font-weight: 700; }
+.qa-report .co ul { margin: 0; padding: 0; list-style: none; }
+.qa-report .co li { padding: 8px 0; border-top: 1px solid var(--sand); font-size: 13.5px; }
+.qa-report .co li:first-child { border-top: 0; }
+.qa-report .co a { color: var(--ink); text-decoration: none; } .qa-report .co a:hover { color: var(--orange-deep); }
+.qa-report .co .pub { color: var(--faint); font-size: 11px; font-family: var(--mono); }
 
 /* Warnings + footer */
-.notes { font-size: 12.5px; color: var(--muted); }
-.notes li { font-family: var(--mono); }
-footer { margin-top: 64px; padding-top: 22px; border-top: 1px solid var(--line-2); font-size: 11.5px; color: var(--faint); font-family: var(--mono); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
-.empty { color: var(--muted); font-size: 13px; padding: 18px; border: 1px dashed var(--line-2); border-radius: 12px; background: var(--card); }
-@media (max-width: 600px) { .news-item { flex-wrap: wrap; } .news-item time { margin-left: 0; } header { padding-top: 36px; } }
+.qa-report .notes { font-size: 12.5px; color: var(--muted); }
+.qa-report .notes li { font-family: var(--mono); }
+.qa-report footer { margin-top: 64px; padding-top: 22px; border-top: 1px solid var(--line-2); font-size: 11.5px; color: var(--faint); font-family: var(--mono); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.qa-report .empty { color: var(--muted); font-size: 13px; padding: 18px; border: 1px dashed var(--line-2); border-radius: 12px; background: var(--card); }
+@media (max-width: 600px) { .qa-report .news-item { flex-wrap: wrap; } .qa-report .news-item time { margin-left: 0; } .qa-report header { padding-top: 36px; } }
 """
 
 
-def render_html(report: dict[str, Any]) -> str:
-    lang = normalize_language(report.get("language", "en"))
+def _html_masthead(report: dict[str, Any], lang: str) -> str:
+    status = str(report.get("data_status"))
+    status_cls = "ok" if status == "ok" else "bad"
+    overview = report.get("market_overview") or {}
+    sample_count = overview.get("symbols_analyzed", report.get("universe_size", 0))
+    na = tr("unavailable", "不可用", lang)
+    title_main = tr("Daily US Equity Research Brief", "今日美股研究简报", lang)
+    return f"""<header>
+  <div class="kicker">Daily US Equity Briefing · {tr('US market research', '美股每日研究', lang)}</div>
+  <h1 class="title">{title_main}<span class="en">A quantitative reading of today's US market</span></h1>
+  <div class="metabar">
+    <span class="pill">{tr('Data as of', '数据截止', lang)} <b>{_esc(report.get('as_of_date') or na)}</b></span>
+    <span class="pill {status_cls}">{tr('Status', '状态', lang)} <b>{_esc(status)}</b></span>
+    <span class="pill">{tr('Generated', '生成', lang)} (UTC) <b>{_esc(str(report.get('generated_at'))[:19])}</b></span>
+    <span class="pill">{tr('Sample', '样本', lang)} <b>{_esc(sample_count)}</b></span>
+  </div>
+</header>
+<div class="ribbon">{_esc(report.get('disclaimer', ''))}</div>"""
+
+
+def _html_footer(report: dict[str, Any], lang: str) -> str:
+    return (
+        f"<footer><span>QUANT.AI · RESEARCH ONLY — {tr('not investment advice', '不构成投资建议', lang)}</span>"
+        f"<span>generated {_esc(str(report.get('generated_at'))[:19])} UTC</span></footer>"
+    )
+
+
+def _html_sections(report: dict[str, Any], lang: str) -> str:
     n = _SectionCounter()
     body = [
+        _html_holdings(report, n, lang),  # 用户最关心自己的钱：持仓永远排最前
         _html_overview(report, n, lang),
         _html_narrative(report, n, lang),
         _html_reco(report, n, lang),
@@ -969,12 +1024,12 @@ def render_html(report: dict[str, Any]) -> str:
         _html_social(report, n, lang),
         _html_notes(report, n, lang),
     ]
-    sections = "\n".join(block for block in body if block)
-    status = str(report.get("data_status"))
-    status_cls = "ok" if status == "ok" else "bad"
-    overview = report.get("market_overview") or {}
-    sample_count = overview.get("symbols_analyzed", report.get("universe_size", 0))
-    na = tr("unavailable", "不可用", lang)
+    return "\n".join(block for block in body if block)
+
+
+def render_html(report: dict[str, Any]) -> str:
+    """Full standalone HTML document (written to disk; web fonts allowed)."""
+    lang = normalize_language(report.get("language", "en"))
     title_main = tr("Daily US Equity Research Brief", "今日美股研究简报", lang)
     return f"""<!doctype html>
 <html lang="{'zh-CN' if lang == 'zh' else 'en'}">
@@ -983,30 +1038,44 @@ def render_html(report: dict[str, Any]) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title_main}</title>
 {_FONT_LINK}
-<style>{_REPORT_CSS}</style>
+<style>:root {{ {_CSS_PALETTE_LIGHT}{_CSS_FONTS_WEB} }}
+{_CSS_PAGE}{_CSS_COMPONENTS}</style>
 </head>
 <body>
-<div class="wrap">
-<header>
-  <div class="kicker">Daily US Equity Briefing · {tr('US market research', '美股每日研究', lang)}</div>
-  <h1 class="title">{title_main}<span class="en">A quantitative reading of today's US market</span></h1>
-  <div class="metabar">
-    <span class="pill">{tr('Data as of', '数据截止', lang)} <b>{_esc(report.get('as_of_date') or na)}</b></span>
-    <span class="pill {status_cls}">{tr('Status', '状态', lang)} <b>{_esc(status)}</b></span>
-    <span class="pill">{tr('Generated', '生成', lang)} (UTC) <b>{_esc(str(report.get('generated_at'))[:19])}</b></span>
-    <span class="pill">{tr('Sample', '样本', lang)} <b>{_esc(sample_count)}</b></span>
-  </div>
-</header>
-<div class="ribbon">{_esc(report.get('disclaimer', ''))}</div>
-{sections}
-<footer>
-  <span>QUANT.AI · RESEARCH ONLY — {tr('not investment advice', '不构成投资建议', lang)}</span>
-  <span>generated {_esc(str(report.get('generated_at'))[:19])} UTC</span>
-</footer>
+<div class="wrap qa-report">
+{_html_masthead(report, lang)}
+{_html_sections(report, lang)}
+{_html_footer(report, lang)}
 </div>
 </body>
 </html>
 """
+
+
+def render_artifact_html(report: dict[str, Any]) -> str:
+    """Self-contained HTML fragment for AI-client artifacts.
+
+    无 doctype/html/head/body 包装、零外部资源（严格 CSP 下可渲染）；样式全部内联并
+    作用域在 .qa-report 下；明暗双主题：跟随 prefers-color-scheme，宿主页面设置
+    :root[data-theme="dark"|"light"] 时以宿主为准。
+    """
+    lang = normalize_language(report.get("language", "en"))
+    css = (
+        f".qa-report{{{_CSS_PALETTE_LIGHT}{_CSS_FONTS_SYSTEM}"
+        "margin:0 auto;max-width:1120px;padding:8px 26px 64px;background:var(--paper);}"
+        f"@media (prefers-color-scheme: dark){{.qa-report{{{_CSS_PALETTE_DARK}}}}}"
+        f':root[data-theme="dark"] .qa-report{{{_CSS_PALETTE_DARK}}}'
+        f':root[data-theme="light"] .qa-report{{{_CSS_PALETTE_LIGHT}}}'
+        f"{_CSS_COMPONENTS}"
+    )
+    return (
+        f'<div class="qa-report" lang="{"zh-CN" if lang == "zh" else "en"}">'
+        f"<style>{css}</style>"
+        f"{_html_masthead(report, lang)}"
+        f"{_html_sections(report, lang)}"
+        f"{_html_footer(report, lang)}"
+        "</div>"
+    )
 
 
 class _SectionCounter:
@@ -1036,6 +1105,61 @@ def _delta(value: Any, suffix: str = "%") -> str:
         return f'<span class="flat">{_esc(value)}</span>'
     cls = "pos" if num > 0 else "neg" if num < 0 else "flat"
     return f'<span class="{cls}">{num:+.2f}{suffix}</span>'
+
+
+def _money_html(value: Any, signed: bool = False, colored: bool = False) -> str:
+    if value is None:
+        return '<span class="muted">—</span>'
+    text = f"{value:+,.2f}" if signed else f"${value:,.2f}"
+    if not colored:
+        return _esc(text)
+    cls = "pos" if value > 0 else "neg" if value < 0 else "flat"
+    return f'<span class="{cls}">{_esc(text)}</span>'
+
+
+def _html_holdings(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
+    holdings = report.get("holdings") or {}
+    positions = holdings.get("positions") or []
+    if not positions:
+        return ""
+    totals = holdings.get("totals") or {}
+    tiles: list[tuple[str, str]] = [
+        (tr("Market value", "总市值", lang), _money_html(totals.get("market_value"))),
+        (tr("Unrealized P&L", "未实现盈亏", lang), _money_html(totals.get("unrealized_pnl"), signed=True, colored=True)),
+        (tr("P&L %", "盈亏幅度", lang), _delta(totals.get("unrealized_pnl_pct"))),
+        (tr("Day P&L", "今日盈亏", lang), _money_html(totals.get("day_pnl"), signed=True, colored=True)),
+        (tr("Positions", "持仓数", lang), str(totals.get("positions", len(positions)))),
+    ]
+    cells = "".join(
+        f'<div class="tile"><div class="t-label">{_esc(label)}</div><div class="t-value">{value}</div></div>'
+        for label, value in tiles
+    )
+    ths = tr(
+        "Symbol|Shares|Price|Day|Mkt value|Cost/share|P&L|P&L %",
+        "代码|股数|现价|当日|市值|成本价|盈亏|盈亏 %",
+        lang,
+    ).split("|")
+    head = "<tr>" + "".join(f"<th>{_esc(t)}</th>" for t in ths) + "</tr>"
+    rows = "".join(
+        f'<tr><td class="sym">{_esc(p["symbol"])}</td>'
+        f'<td class="num">{_esc(_fmt_qty(p["shares"]))}</td>'
+        f'<td class="num">{_money_html(p.get("price"))}</td>'
+        f'<td class="num">{_delta(p.get("day_change_pct"))}</td>'
+        f'<td class="num">{_money_html(p.get("market_value"))}</td>'
+        f'<td class="num muted">{_money_html(p.get("cost_basis"))}</td>'
+        f'<td class="num">{_money_html(p.get("unrealized_pnl"), signed=True, colored=True)}</td>'
+        f'<td class="num">{_delta(p.get("unrealized_pnl_pct"))}</td></tr>'
+        for p in positions
+    )
+    section_head = _sec_head(
+        n.next(), tr("My holdings", "我的持仓", lang), _quotes_source_label(holdings.get("quotes_source"), lang)
+    )
+    return (
+        f"<section>{section_head}"
+        f'<div class="tiles" style="margin-bottom:16px">{cells}</div>'
+        f'<div class="panel"><table class="holdings"><thead>{head}</thead><tbody>{rows}</tbody></table></div>'
+        "</section>"
+    )
 
 
 def _html_overview(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:

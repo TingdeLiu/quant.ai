@@ -6,7 +6,13 @@ from pathlib import Path
 from _helpers import _config, _synthetic_prices
 
 from quant_agent.config import parse_config
-from quant_agent.market_intel import build_market_report, render_html, render_markdown
+from quant_agent.market_intel import (
+    build_market_report,
+    render_artifact_html,
+    render_html,
+    render_markdown,
+    write_market_report,
+)
 from quant_agent.markets_data import build_markets_data
 from quant_agent.recommendations import RECOMMENDATION_PROFILES
 
@@ -123,6 +129,61 @@ def test_market_report_without_portfolio_has_no_holdings(tmp_path: Path) -> None
     report = build_market_report(config, quote_fetcher=lambda symbols: {})
     assert "holdings" not in report
     assert "My holdings" not in render_markdown(report)
+    # 无持仓时 artifact 第一个 section 是市场概览，编号从 01 开始。
+    artifact = render_artifact_html(report)
+    assert "My holdings" not in artifact
+    assert '<span class="sec-num">01</span><h2>Market overview</h2>' in artifact
+
+
+def test_holdings_section_first_in_html(tmp_path: Path) -> None:
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {})
+
+    html = render_html(report)
+    artifact = render_artifact_html(report)
+    for rendered in (html, artifact):
+        assert rendered.index("My holdings") < rendered.index("Market overview")
+    # 持仓段占用 01 号，概览顺延为 02。
+    assert '<span class="sec-num">01</span><h2>My holdings</h2>' in artifact
+    assert '<span class="sec-num">02</span><h2>Market overview</h2>' in artifact
+
+
+def test_render_artifact_html_self_contained(tmp_path: Path) -> None:
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {})
+    artifact = render_artifact_html(report)
+
+    # 片段形态：无文档包装、零外部资源（artifact 的严格 CSP 下必须可渲染）。
+    assert "<html" not in artifact
+    assert "<head>" not in artifact and "<body" not in artifact and "<!doctype" not in artifact.lower()
+    assert "fonts.googleapis" not in artifact
+    assert "<link" not in artifact
+    # 明暗双主题钩子齐备。
+    assert 'class="qa-report"' in artifact
+    assert "prefers-color-scheme: dark" in artifact
+    assert 'data-theme="dark"' in artifact
+    assert 'data-theme="light"' in artifact
+    # 整页版保持完整文档 + 网络字体。
+    html = render_html(report)
+    assert html.startswith("<!doctype html>")
+    assert "fonts.googleapis" in html
+
+
+def test_write_market_report_writes_artifact(tmp_path: Path) -> None:
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {})
+    paths = write_market_report(report, tmp_path / "reports")
+
+    assert set(paths) == {"json", "markdown", "html", "artifact"}
+    for path in paths.values():
+        assert path.exists() and path.stat().st_size > 0
+    assert paths["artifact"].name == "market_intel_artifact.html"
 
 
 def test_markets_data_builds_offline(tmp_path: Path) -> None:
