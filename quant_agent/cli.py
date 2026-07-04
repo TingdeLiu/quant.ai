@@ -17,6 +17,7 @@ from quant_agent.dashboard import write_dashboard
 from quant_agent.data import load_prices
 from quant_agent.data_quality import build_data_quality_report, write_data_quality_report
 from quant_agent.features import build_signals
+from quant_agent.holdings import apply_portfolio_universe
 from quant_agent.i18n import normalize_language, tr
 from quant_agent.market_intel import build_market_report, write_market_report
 from quant_agent.ml import apply_ml_ranking_signal
@@ -310,11 +311,15 @@ def plan_paper_orders_command(
 
 @app.command("market-report")
 def market_report_command(
-    config: Path = typer.Option(Path("configs/full_roadmap.yaml"), "--config", "-c"),
+    config: Path | None = typer.Option(
+        None, "--config", "-c", help="Config path (default: configs/my.yaml if present, else configs/full_roadmap.yaml)"
+    ),
     output_dir: Path | None = typer.Option(None, "--output-dir", "-o"),
 ) -> None:
-    """Generate a daily US market intelligence report (news + quant)."""
-    app_config = load_config(config)
+    """Generate a daily US market intelligence report (news + quant + your holdings P&L)."""
+    if config is None:  # 与 MCP server 一致：优先个人配置
+        config = Path("configs/my.yaml") if Path("configs/my.yaml").exists() else Path("configs/full_roadmap.yaml")
+    app_config = apply_portfolio_universe(load_config(config))
     report = build_market_report(app_config)
     destination = output_dir or app_config.market_intel.output_dir
     paths = write_market_report(report, destination)
@@ -323,6 +328,7 @@ def market_report_command(
     console.print(f"Data status: {report['data_status']}, as of {report['as_of_date']}")
     console.print(f"Buy candidates: {len(report['buy_candidates'])}, high risk: {len(report['high_risk'])}, news: {len(report['news'])}")
     console.print(f"HTML: {paths['html']}")
+    console.print(f"Artifact HTML: {paths['artifact']}")
 
 
 @app.command("write-dashboard")
