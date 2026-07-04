@@ -69,7 +69,9 @@ Install https://github.com/TingdeLiu/quant.ai as an MCP server:
 
 `quant-ai market-report` builds a daily US-equity research brief — your holdings P&L (when set), market overview, watch / high-risk lists, quant picks by holding horizon, and free news headlines — in an Anthropic-style design, written as HTML + a self-contained artifact + Markdown + JSON:
 
-<img src="assets/market-report-example.png" alt="Daily market report" width="820">
+<img src="assets/market-report-example.png" alt="Daily market report — holdings P&L first; one report, light & dark artifact themes" width="820">
+
+<sub>One report, both artifact themes — left: light, right: dark. Your holdings P&L opens the brief.</sub>
 
 `quant-ai serve-dashboard` (or `write-dashboard`) renders backtest diagnostics — headline metrics, alerts, period breakdown, risk checks, positions and trades — with a built-in **EN / 中文** toggle:
 
