@@ -16,6 +16,7 @@ import html
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ import pandas as pd
 from quant_agent.config import AppConfig
 from quant_agent.data import load_prices
 from quant_agent.features import build_signals
+from quant_agent.holdings import build_holdings_snapshot, fetch_live_quotes, load_portfolio
 from quant_agent.i18n import normalize_language, tr
 from quant_agent.llm import generate_market_narrative
 from quant_agent.recommendations import RECOMMENDATION_PROFILES
@@ -72,8 +74,15 @@ def _z_label(column: str, lang: str) -> str:
     return tr(*pair, lang) if pair else column
 
 
-def build_market_report(config: AppConfig) -> dict[str, Any]:
-    """Build the full daily market intelligence report payload."""
+def build_market_report(
+    config: AppConfig,
+    quote_fetcher: Callable[[list[str]], dict[str, float]] = fetch_live_quotes,
+) -> dict[str, Any]:
+    """Build the full daily market intelligence report payload.
+
+    ``quote_fetcher`` is injectable for offline tests; it is only invoked when the
+    chat-managed portfolio actually has holdings.
+    """
     mi = config.market_intel
     lang = normalize_language(config.language)
     generated_at = datetime.now(UTC).isoformat()
@@ -114,6 +123,20 @@ def build_market_report(config: AppConfig) -> dict[str, Any]:
         report["high_risk"] = analysis["high_risk"]
         analysis_symbols = analysis["focus_symbols"]
         report["quant_candidates"] = _quant_candidates(prices, config, lang)
+
+    # Chat-managed portfolio: holdings snapshot (P&L) + held symbols lead the news focus.
+    portfolio: dict[str, Any] = {}
+    try:
+        portfolio = load_portfolio(config.portfolio_path)
+    except Exception as exc:
+        report["warnings"].append(f"portfolio_unreadable: {exc}")
+    holding_symbols = [h["symbol"] for h in portfolio.get("holdings", [])]
+    if holding_symbols:
+        quotes = quote_fetcher(holding_symbols)  # {} on network failure -> last close
+        report["holdings"] = build_holdings_snapshot(portfolio, prices, quotes)
+        focus = list(holding_symbols)
+        focus += [symbol for symbol in analysis_symbols if symbol not in focus]
+        analysis_symbols = focus[:12]
 
     # Market-wide financial media headlines.
     report["news"], news_errors = _collect_feeds(mi.news_feeds, mi.max_news_items, mi.request_timeout)
@@ -643,6 +666,29 @@ def _build_llm_prompt(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _fmt_money(value: Any, signed: bool = False) -> str:
+    if value is None:
+        return "—"
+    return f"{value:+,.2f}" if signed else f"{value:,.2f}"
+
+
+def _fmt_pct_signed(value: Any) -> str:
+    return "—" if value is None else f"{value:+.2f}%"
+
+
+def _fmt_qty(value: Any) -> str:
+    return "—" if value is None else f"{float(value):g}"
+
+
+def _quotes_source_label(source: str | None, lang: str) -> str:
+    labels = {
+        "realtime": tr("realtime quotes", "实时行情", lang),
+        "mixed": tr("realtime + last close", "实时/收盘混合", lang),
+        "last_close": tr("last close", "上一收盘", lang),
+    }
+    return labels.get(source or "", labels["last_close"])
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     lang = normalize_language(report.get("language", "en"))
     na = tr("unavailable", "不可用", lang)
@@ -653,6 +699,37 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append(f"> {report.get('disclaimer')}")
     lines.append("")
+
+    holdings = report.get("holdings") or {}
+    if holdings.get("positions"):
+        lines.append(f"## {tr('My holdings', '我的持仓', lang)}")
+        lines.append(
+            f"_{tr('Priced from', '价格口径', lang)}: "
+            f"{_quotes_source_label(holdings.get('quotes_source'), lang)}_"
+        )
+        lines.append("")
+        header = tr(
+            "Symbol|Shares|Price|Day|Mkt value|Cost/share|P&L|P&L %",
+            "代码|股数|现价|当日|市值|成本价|盈亏|盈亏 %",
+            lang,
+        )
+        lines.append("| " + " | ".join(header.split("|")) + " |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
+        for position in holdings["positions"]:
+            lines.append(
+                f"| {position['symbol']} | {_fmt_qty(position['shares'])} | {_fmt_money(position['price'])} | "
+                f"{_fmt_pct_signed(position['day_change_pct'])} | {_fmt_money(position['market_value'])} | "
+                f"{_fmt_money(position['cost_basis'])} | {_fmt_money(position['unrealized_pnl'], signed=True)} | "
+                f"{_fmt_pct_signed(position['unrealized_pnl_pct'])} |"
+            )
+        totals = holdings.get("totals") or {}
+        lines.append(
+            f"| **{tr('Total', '合计', lang)}** |  |  | {_fmt_money(totals.get('day_pnl'), signed=True)} | "
+            f"{_fmt_money(totals.get('market_value'))} | {_fmt_money(totals.get('cost_value'))} | "
+            f"{_fmt_money(totals.get('unrealized_pnl'), signed=True)} | "
+            f"{_fmt_pct_signed(totals.get('unrealized_pnl_pct'))} |"
+        )
+        lines.append("")
 
     overview = report.get("market_overview") or {}
     if overview:
