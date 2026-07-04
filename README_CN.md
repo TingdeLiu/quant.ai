@@ -1,552 +1,50 @@
-# quant.ai 中文说明
+# quant.ai
 
-[English](README.md) | **中文**
+> **长在你 AI 助手里的美股量化研究工具。**
+> 通过 [MCP](https://modelcontextprotocol.io) 接入 **Claude 或 Codex**，随口问任何一只股票——拿到可解释的评级、关键价位和判断依据，然后*就在同一个对话里继续讨论*。也可以当作一行命令的 CLI 使用。
+
+[English](README.md) | 中文
 
 [![CI](https://github.com/TingdeLiu/quant.ai/actions/workflows/ci.yml/badge.svg)](https://github.com/TingdeLiu/quant.ai/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-> 面向普通股民的美股量化研究工具：一行命令分析个股，给出可解释的中文评级与关键价位。
+`quant.ai` 是一个面向普通投资者的美股命令行量化研究工具箱。一行命令即可得到可解释的评级、支撑/止损参考位与判断依据——全部由历史价格计算，离线友好，不接任何券商。
 
-**30 秒上手：**
-
-```bash
-pip install -e .          # 安装（或 pip install -r requirements.txt）
-quant-ai doctor           # 环境自检：依赖与行情数据源是否就绪
-quant-ai analyze AAPL     # 秒级给出评级与关键价位
-```
-
-> 装完先跑 `quant-ai doctor`：逐项检查 Python 版本、必需依赖（缺失则报错退出）、可选依赖（`pyarrow` / `matplotlib`，缺失仅提示），并拉取一次 SPY 行情确认网络可用。
-
-> ⚠️ 仅做基于历史价格的量化研究分析，**不构成投资建议**，也不会产生任何下单指令。
-
----
-
-`quant.ai` 是一个美股日线量化研究与回测 agent 原型。当前版本已经打通从数据读取、信号生成、组合构建、风险检查、回测评估、ML ranking、报告输出、纸面订单计划、本地 dashboard、API token 认证到操作审计日志的基础闭环，并通过 MCP 内嵌进 Claude/Codex：对话式管理自选池与持仓，每日报告开头即你的持仓盈亏，报告以 Claude 风格 HTML artifact 呈现。
-
-这个项目的定位是研究和验证，不是实盘交易系统。不会提交真实订单，也不提供任何下单/审批链路；AI/LLM 只用于研究审阅、报告解释和风险提示，不直接生成 broker order。持仓是用户口述的记账数据，仅用于研究上下文。
-
-## 项目已经完成了什么
-
-### 研究与回测主流程
-
-- 支持从 `yfinance` 下载美股日线数据。
-- 支持本地 CSV、Parquet 单文件数据源。
-- 支持本地 CSV、Parquet 目录数据源，并可按文件名推断单标的 `symbol`。
-- 支持从 `configs/universe_default.csv` 读取默认股票池。
-- 标准化 OHLCV 字段，并输出数据质量检查。
-- 生成基础量化信号：
-  - 12-1 momentum。
-  - 20/50 moving-average trend。
-  - 1-month reversal。
-  - 20-day low-volatility score。
-  - 可选 ML ranking signal。
-- 支持通过 `strategy.signal_weights` 配置信号权重。
-- 构建 long-only、top N、月度调仓、等权配置组合。
-- 执行风险检查：
-  - 最大持仓数。
-  - 最大单票权重。
-  - long-only。
-  - 最大换手。
-  - 最小流动性阈值配置。
-- 执行 close-to-close 研究级回测。
-- 计入交易成本和滑点。
-- 输出 SPY benchmark 和默认股票池等权 baseline。
-- 输出 CAGR、Sharpe、Sortino、Calmar、最大回撤、波动率、胜率、换手、beta、alpha、information ratio、持仓周期等指标。
-
-### 分类型研究买入候选
-
-- 每次回测会基于最新可用日线数据输出研究候选名单，不构成投资建议或实盘交易授权。
-- 支持五类候选：
-  - `long_term`: 长期，侧重 12-1 动量、趋势和低波动。
-  - `swing`: 波段，侧重 20/50 趋势、1 月反转和动量。
-  - `short_term`: 短期，侧重 1 月反转、短趋势和近期分数。
-  - `defensive`: 防守，侧重低波动和趋势稳定性。
-  - `aggressive`: 激进，侧重高动量、高趋势和 ML rank。
-- 输出总表 `recommendations.csv` 和分类型文件 `recommendations_<type>.csv`。
-- 输出字段包括 rank、symbol、recommendation_score、confidence、risk_level、target_weight、research_weight、latest_price、data_date 和 reason。
-
-### 信号诊断与权重优化
-
-- 输出单信号诊断：`signal_diagnostics.csv`。
-- 使用 train/validation period 做候选信号权重搜索。
-- 只用 validation period 选择推荐权重，避免用 test period 调参。
-- 输出推荐权重：`recommended_signal_weights.json`。
-- 用推荐权重单独跑 recommended strategy。
-- 输出 recommended strategy 的 equity、positions、trades 和 period metrics。
-- 支持多窗口 walk-forward 信号搜索。
-- 输出 walk-forward 稳定性排名：`walk_forward_stability.csv`。
-- 输出 walk-forward 聚合推荐权重：`walk_forward_recommended_signal_weights.json`。
-- 提供 `write-recommended-config` 命令，把推荐权重写成独立配置。
-
-### ML ranking 基础版
-
-- 基于技术特征训练 Ridge ranking signal。
-- 支持配置：
-  - `model_version`
-  - `feature_version`
-  - `prediction_horizon_days`
-  - `train_period`
-- 输出：
-  - `ml_feature_matrix.csv`
-  - `ml_predictions.csv`
-  - `ml_diagnostics.json`
-- ML signal 进入同一套组合构建、风险检查和权重搜索流程，不绕过风控层。
-
-### 每日美股市场情报报告
-
-- 在控制台点击「生成今日美股分析报告」按钮，或运行 `market-report` 命令，即可生成一份当日美股研究简报。
-- 数据来源为免费、无需 API key 的公开渠道：
-  - 财经媒体 RSS 头条（默认 Yahoo Finance、CNBC、MarketWatch、Investing.com）。
-  - 重点个股最新资讯（基于 yfinance 个股新闻）。
-  - 可选 X / 社交平台 RSS 源，默认关闭。
-- 报告内容基于项目已有的量化信号和历史价格统计，明确区分：
-  - 「相对值得关注」研究候选：趋势向上、近月为正、波动相对可控、接近高点。
-  - 「高风险」标的：高波动、深回撤、近期急跌或显著低于 52 周高点。
-  - 分类型量化候选（长期 / 波段 / 短期 / 防守 / 激进）。
-- 当 `llm.enabled` 且配置了 API key 时，会用大模型把新闻和量化数据综合成自然语言分析；否则回落到结构化模板，无需任何 key 也能用。
-- 输出文件：`market_intel.json`、`market_intel.md`、`market_intel.html`、`market_intel_artifact.html`（自包含、明暗双主题，供 Claude 直接渲染为 artifact）。
-- HTML 报告采用 Anthropic / Claude 品牌视觉（暖米白底、赤陶橙点缀、Poppins 标题 + Lora 正文、绿涨橙红跌），设有持仓时报告置顶「我的持仓」盈亏段，核心板块为「按持有周期的研究推荐」（长线 / 中线·波段 / 短线 / 防守 / 激进），每只标的带价格、强度条和信号依据。
-- 严格定位为研究，不构成投资建议，也不会生成任何下单指令或实盘授权。
-
-### Markets 实时分析仪表盘
-
-- 本地服务提供一个交互式仪表盘 `/markets`，使用 Claude Design 导出的 Tyndall Markets 设计（Anthropic 品牌设计系统），由 React 在浏览器内渲染。
-- 包含：股票搜索、价格图、关键指标、AI 分析师面板（评级 + 摘要 + 多空论点 + 追问输入框）、自选股和每日简报。
-- 全部内容由项目真实量化数据驱动（`/api/markets-data`）：评级、摘要、多空论点均从横截面信号和价格统计派生；无外部 key、无下单能力，纯研究展示。
-- 设计文件 vendored 在 `quant_agent/web/`，相对路径结构保持原样，因此该 UI 在 Claude Design 中也能独立打开（缺少真实数据时回落到内置占位数据）。
-
-### LLM 研究审阅基础版
-
-- 默认使用离线模板审阅，不需要 API key 也能运行。
-- 可选 OpenAI-compatible chat completions client。
-- 缺少 API key 或请求失败时自动回落离线模板。
-- 保存 prompt version、model、input hash、output hash 等元数据。
-- 明确限制 LLM 只做研究摘要、风险提示、因子假设和异常检查建议。
-- 拦截明显 broker/order 指令化输出。
-
-### 数据质量、告警和通知
-
-- 输出数据质量报告：
-  - `data_quality.json`
-  - `data_quality.md`
-  - `data_quality_by_symbol.csv`
-- 检查 stale data、missing universe symbols、point-in-time 元数据和 corporate action 元数据。
-- 输出告警文件：
-  - `alerts.json`
-  - `alerts.csv`
-  - `alerts.md`
-- 告警覆盖：
-  - 最大回撤突破阈值。
-  - Sharpe 低于阈值。
-  - risk check 失败。
-  - stale price rows。
-  - missing universe symbols。
-  - point-in-time 元数据缺失。
-  - paper order plan 未审批。
-- 支持通知 outbox：
-  - `notifications.json`
-  - `notifications.csv`
-  - `notification_outbox.json`
-  - `notification_outbox.csv`
-- 支持可选 webhook channel，通过环境变量读取 webhook URL。
-
-### 纸面订单计划（研究模拟）
-
-- 从 target positions 和 current positions 生成 proposed orders。
-- 支持 current positions CSV 输入。
-- 支持 max order notional 和 gross notional 风控检查。
-- 输出：
-  - `proposed_orders.csv`
-  - `paper_trading_audit.json`
-- 纯研究模拟：项目不含任何 broker 提交或人工审批链路。
-
-### 对话管理的自选与持仓（MCP）
-
-- `data/portfolio.json` 单文件存储（已 gitignore）：`watchlist` + `holdings`（股数/成本价/备注）。
-- 通过 MCP 工具 `quant_manage_watchlist` / `quant_manage_holdings` 对话式增删，原子写入。
-- 自选与持仓标的自动并入所有研究工具的 universe，且滚动价格库从旧缓存播种、按标的增量补齐（加自选不再整库重下）。
-- 每日报告置顶「我的持仓」段：现价（尽力实时、降级上一收盘）、当日变动、市值、成本、未实现盈亏与合计。
-
-### 本地 dashboard 与服务端
-
-- 可生成静态 HTML dashboard：`dashboard.html`。
-- dashboard 展示：
-  - 关键指标。
-  - 分段指标。
-  - risk checks。
-  - data quality。
-  - paper trading checks。
-  - equity curve。
-  - positions。
-  - trades。
-  - proposed orders。
-- 提供本地服务入口：`serve-dashboard`。
-- 本地服务支持：
-  - 查看运行状态。
-  - 查看报告文件。
-  - 触发新回测。
-  - 查看 run history。
-  - 查看 alerts、notifications 和 audit。
-- 每次服务端触发运行都会生成独立 run 目录：
-  - `reports/full_roadmap/runs/<run_id>/`
-- 服务端维护：
-  - `reports/full_roadmap/service/runtime_status.json`
-  - `reports/full_roadmap/service/run_history.json`
-- 支持配置化定时运行基础版。
-- 已实现 API token 认证：
-  - 前端输入 token。
-  - 服务端校验 `Authorization: Bearer <token>` 或 `X-API-Token`。
-- 已实现 dashboard 操作审计日志：
-  - `reports/full_roadmap/service/dashboard_audit.jsonl`
-  - 记录触发回测、报告生成和未授权 API 访问。
-
-## 项目目录结构
-
-```text
-quant.ai/
-  quant_agent/                 核心 Python 包
-    cli.py                     Typer CLI 入口
-    config.py                  配置结构和解析
-    data.py                    数据读取与缓存
-    features.py                信号生成
-    portfolio.py               组合构建
-    risk.py                    风控检查
-    backtest.py                回测引擎
-    metrics.py                 绩效指标
-    optimization.py            信号权重搜索和 walk-forward
-    ml.py                      ML ranking signal
-    llm.py                     LLM 审阅 client
-    paper.py                   纸面订单计划
-    holdings.py                聊天管理的自选/持仓存储与盈亏快照
-    market_intel.py            每日市场报告（MD/HTML/artifact 渲染）
-    mcp_server.py              MCP server（Claude/Codex 集成入口）
-    alerts.py                  告警
-    notifications.py           通知 outbox/webhook
-    dashboard.py               静态 dashboard 生成
-    server.py                  本地 dashboard 服务
-    reports.py                 报告输出
-  configs/
-    default.yaml               默认研究回测配置
-    full_roadmap.yaml          打开 roadmap 基础闭环的配置
-    recommended.yaml           推荐权重配置
-    walk_forward_recommended.yaml
-    universe_default.csv       默认股票池
-  reports/                     输出目录
-  tests/                       pytest 测试
-  reference/                   研究参考资料
-  roadmap.md                   项目路线图
-```
-
-## 环境安装
-
-推荐使用 conda 环境：
-
-```powershell
-conda env create -f environment.yml
-conda activate quant-ai
-```
-
-如果环境已经存在：
-
-```powershell
-conda env update -n quant-ai -f environment.yml --prune
-conda activate quant-ai
-```
-
-如果 Windows 终端找不到 `conda`，可以在 Anaconda Prompt 里执行，或者用你本机 Miniconda/Anaconda 安装目录下的 `conda` 可执行文件（把下面的 `<你的 miniconda 路径>` 换成实际路径）：
-
-```powershell
-<你的 miniconda 路径>\Scripts\conda.exe env update -n quant-ai -f environment.yml --prune
-```
-
-也可以用 `requirements.txt` 安装 Python 依赖：
-
-```powershell
-python -m pip install -r requirements.txt
-```
+> ⚠️ 仅供研究——**不构成投资建议**，永远不会提交或建议实盘订单。
+> 输出**默认英文**；加 `--lang zh`（或在 `quant-ai init` 时选择）切换中文。
 
 ## 快速开始
 
-### 最快上手：分析一只股票（零配置，秒级）
-
-无需配置股票池、无需跑回测，直接分析任意美股：
-
-```powershell
-python -m quant_agent analyze AAPL
-python -m quant_agent analyze AAPL MSFT NVDA --output-dir reports/analyze
+```bash
+pip install -e .          # 或：pip install -r requirements.txt
+quant-ai doctor           # 环境自检（依赖 + 数据连通性）
+quant-ai analyze AAPL     # 秒级评级一只股票
 ```
 
-输出包含：最新价、各周期涨跌（1/3/6 月、1 年）、RSI、年化波动率、均线位置（MA20/50/200）、中文评级（强烈看多 / 偏多 / 中性 / 偏空 / 强烈看空）、判断依据，以及参考关注位（支撑 / 止损）。
+没有命令入口？`python -m quant_agent analyze AAPL` 效果相同。
 
-> 仅为基于历史价格的量化研究分析，不构成投资建议，也不会产生任何下单指令。
+## 你会得到什么
 
-### 个性化股票池：`quant-ai init`
+<img src="assets/analyze-example.png" alt="quant-ai analyze AAPL 的真实输出" width="820">
 
-第一次使用时跑一次交互式引导，按你的兴趣搭一份个性化股票池：
+`quant-ai analyze AAPL` 的真实输出——**默认英文**，`--lang zh` 切中文。评级从**强烈看多**经**中性**到**强烈看空**。加 `--output-dir` 导出 Markdown + JSON，或 `--chart` 输出 PNG 图表。
 
-```powershell
-python -m quant_agent init
+## 在 Claude 或 Codex 里使用
+
+头号特性——把 quant.ai 暴露为 [MCP](https://modelcontextprotocol.io) server，让你的 AI 助手直接调用：
+
+```bash
+claude mcp add quant-research -- python -m quant_agent.mcp_server
 ```
 
-会问三个问题——感兴趣的**板块**、额外关注的**公司**、**风险偏好**（长线 / 波段 / 短线 / 防守 / 激进），然后生成股票池：
+然后在你日常工作的对话里直接问：
 
-- **2/3 来自你的自选**：点名的公司 + 所选板块的代表股；
-- **1/3 由系统发现**：在全市场候选目录 `configs/catalog.csv`（约 170 只流动美股，按中文板块归类）里，按风险偏好对应的横截面信号打分，挑出你**没选到**的强势标的。
+> *「NVDA 现在怎么看？」* · *「帮我关注特斯拉」* · *「我 182.5 买了 15 股苹果，帮我记着」* · *「我的持仓怎么样了？」* · *「生成今日美股报告」*
 
-生成物（均已 gitignore）：
+Claude（或 Codex）会调取项目的真实数据，把量化分析摆在你面前，你就地讨论——不用开网站，不用复制粘贴。每日报告**以你的持仓盈亏开篇**，并渲染成精致的 **HTML artifact**。Claude Desktop / Codex 配置详见[中文手册](docs/manual_zh.md#集成到-claudemcp)。
 
-- `configs/my_universe.csv`：最终股票池，`source` 列标注 `picked`（点名）/ `sector`（板块）/ `discovery`（发现）。
-- `configs/my.yaml`：指向该股票池的配置，可直接喂给其它命令。
-- `configs/profile.json`：保存的偏好，供 `refresh-universe` 复用。
-
-之后：
-
-```powershell
-python -m quant_agent analyze --watchlist                          # 分析个性化股票池
-python -m quant_agent market-report --config configs/my.yaml       # 用它生成每日市场简报
-python -m quant_agent refresh-universe                              # 行情更新后重算发现池 1/3（自选不变）
-```
-
-脚本化/无人值守：
-
-```powershell
-python -m quant_agent init --non-interactive `
-  --sector 半导体 --sector 医疗健康 --ticker AAPL --risk 波段
-```
-
-加 `--no-discovery` 跳过联网评估、只写自选部分。无网络时也会自动降级（只写自选并提示，联网后用 `refresh-universe` 补全），不会抛堆栈。
-
-### 运行默认回测
-
-```powershell
-python -m quant_agent run-backtest --config configs/default.yaml
-```
-
-输出目录：
-
-```text
-reports/latest/
-```
-
-重点查看：
-
-```text
-reports/latest/summary.md
-reports/latest/audit.json
-reports/latest/dashboard.html
-```
-
-运行全功能基础版：
-
-```powershell
-python -m quant_agent run-backtest --config configs/full_roadmap.yaml
-```
-
-当前报告快照输出目录：
-
-```text
-reports/full_roadmap/current/
-```
-
-## 常用命令
-
-### 个性化股票池
-
-```powershell
-quant-ai init                                          # 交互式引导，生成个性化股票池（2/3 自选 + 1/3 发现）
-quant-ai init --non-interactive --sector 半导体 --ticker AAPL --risk 波段  # 脚本化
-quant-ai refresh-universe                              # 行情更新后重算发现池 1/3
-```
-
-### 快速分析个股（零配置）
-
-```powershell
-quant-ai analyze AAPL                                  # 单只（pip install 后可用 quant-ai 命令）
-quant-ai analyze AAPL MSFT NVDA                        # 多只
-quant-ai analyze --watchlist                           # 分析个性化股票池 configs/my_universe.csv
-quant-ai analyze --file watchlist.txt                  # 从自选股文件读取（每行一个或逗号分隔，# 为注释）
-quant-ai analyze AAPL --output-dir reports/analyze     # 导出 md+json
-quant-ai analyze AAPL --output-dir reports/analyze --chart  # 额外导出价格+均线+RSI 的 PNG
-quant-ai analyze AAPL --json                           # 仅 JSON，便于脚本调用
-quant-ai analyze AAPL --config configs/default.yaml    # 附带 AI 综合解读（需配置 LLM）
-```
-
-> 未安装命令入口时，把上面的 `quant-ai` 换成 `python -m quant_agent` 即可，效果相同。
-
-### 运行回测
-
-```powershell
-python -m quant_agent run-backtest --config configs/default.yaml
-python -m quant_agent run-backtest --config configs/full_roadmap.yaml
-```
-
-### 生成数据质量报告
-
-```powershell
-python -m quant_agent data-quality --config configs/default.yaml --output-dir reports/data_quality
-```
-
-### 生成纸面订单计划
-
-```powershell
-python -m quant_agent plan-paper-orders --config configs/full_roadmap.yaml --output-dir reports/full_roadmap/paper
-```
-
-如果有当前持仓文件：
-
-```powershell
-python -m quant_agent plan-paper-orders `
-  --config configs/full_roadmap.yaml `
-  --current-positions data/current_positions.csv `
-  --output-dir reports/full_roadmap/paper
-```
-
-当前持仓 CSV 至少应包含系统能识别的 symbol/position 字段，具体可参考 `quant_agent/paper.py`。
-
-### 生成每日美股市场情报报告
-
-```powershell
-python -m quant_agent market-report --config configs/full_roadmap.yaml
-```
-
-输出（默认写入 `report.output_dir`，便于 dashboard 文件列表直接展示）：
-
-```text
-market_intel.html             可读 HTML 报告（完整文档，浏览器直开）
-market_intel_artifact.html    自包含 HTML 片段（Claude artifact 渲染用，明暗双主题）
-market_intel.md               Markdown 报告
-market_intel.json             结构化数据
-```
-
-也可以在本地服务页面点击「生成今日美股分析报告」按钮触发，完成后点「打开美股分析报告」查看。
-
-### 生成 dashboard HTML
-
-```powershell
-python -m quant_agent write-dashboard reports/full_roadmap/current --output reports/full_roadmap/current/dashboard.html
-```
-
-### 生成推荐权重配置
-
-```powershell
-python -m quant_agent write-recommended-config `
-  --config configs/default.yaml `
-  --weights reports/latest/recommended_signal_weights.json `
-  --output configs/recommended.yaml
-
-python -m quant_agent run-backtest --config configs/recommended.yaml
-```
-
-### 使用 walk-forward 推荐权重
-
-```powershell
-python -m quant_agent write-recommended-config `
-  --config configs/default.yaml `
-  --weights reports/latest/walk_forward_recommended_signal_weights.json `
-  --output configs/walk_forward_recommended.yaml `
-  --report-output-dir reports/walk_forward_recommended
-
-python -m quant_agent run-backtest --config configs/walk_forward_recommended.yaml
-```
-
-## 启动本地 dashboard 服务
-
-`configs/full_roadmap.yaml` 默认已**关闭** dashboard API token 认证（`dashboard_security.enabled: false`），本地单机直接启动即可：
-
-```powershell
-python -m quant_agent serve-dashboard --config configs/full_roadmap.yaml --port 8765
-```
-
-打开：
-
-```text
-http://127.0.0.1:8765
-```
-
-无需输入 token，即可查看状态、刷新报告文件、触发回测、生成美股分析报告和查看操作审计。
-
-如需对外暴露服务，建议改回 `dashboard_security.enabled: true` 并设置 token，再启动：
-
-```powershell
-$env:QUANT_AGENT_DASHBOARD_TOKEN = "change-me-local-token"
-python -m quant_agent serve-dashboard --config configs/full_roadmap.yaml --port 8765
-```
-
-启用后页面会要求输入与 `QUANT_AGENT_DASHBOARD_TOKEN` 相同的 API token。
-
-`full_roadmap` 输出目录已经整理为：
-
-```text
-reports/full_roadmap/current/              当前最新报告快照
-reports/full_roadmap/runs/<run_id>/         每次服务端触发运行的独立报告目录
-reports/full_roadmap/service/               dashboard 服务状态和操作审计
-reports/full_roadmap/notifications/         通知 outbox
-reports/full_roadmap/paper/                 手动生成的纸面订单计划
-```
-
-服务端相关输出：
-
-```text
-reports/full_roadmap/service/runtime_status.json
-reports/full_roadmap/service/run_history.json
-reports/full_roadmap/service/dashboard_audit.jsonl
-```
-
-## Dashboard API
-
-已启用 token 时，所有 `/api/*` 请求需要带 header：
-
-```text
-Authorization: Bearer <token>
-```
-
-也支持：
-
-```text
-X-API-Token: <token>
-```
-
-PowerShell 示例：
-
-```powershell
-$headers = @{ Authorization = "Bearer $env:QUANT_AGENT_DASHBOARD_TOKEN" }
-Invoke-RestMethod http://127.0.0.1:8765/api/status -Headers $headers
-Invoke-RestMethod http://127.0.0.1:8765/api/run -Method Post -Headers $headers
-Invoke-RestMethod http://127.0.0.1:8765/api/operation-audit -Headers $headers
-```
-
-当前 API：
-
-```text
-GET  /api/status
-GET  /api/audit
-GET  /api/files
-GET  /api/alerts
-GET  /api/notifications
-GET  /api/runs
-GET  /api/runs/<run_id>
-GET  /api/runs/<run_id>/approval
-GET  /api/runs/<run_id>/alerts
-GET  /api/operation-audit
-GET  /api/market-report
-GET  /api/market-report/status
-POST /api/market-report
-GET  /market-report
-GET  /api/markets-data
-GET  /markets
-GET  /m/<asset>
-POST /api/run
-GET  /dashboard
-GET  /report/<file>
-GET  /runs/<run_id>/dashboard
-```
-
-## 集成到 Claude（MCP）
-
-项目提供一个本地 MCP（Model Context Protocol）server，把研究能力暴露为工具，让 Claude 桌面端 / Claude Code 用自然语言驱动。设计理念是 **项目当「工具 + 数据」层，Claude 当「分析大脑」**。所有工具均为研究导向，**不暴露任何下单或实盘授权能力**；唯一的「写入」是你自己的自选池与持仓记账。
-
-**让 AI 帮你安装** —— 把下面这段直接丢给 Claude Code（或任何 AI CLI）即可：
+**让 AI 替你安装**——把下面这段丢给 Claude Code（或任何 AI CLI）即可搞定一切：
 
 ```text
 把 https://github.com/TingdeLiu/quant.ai 安装为 MCP server：
@@ -556,352 +54,64 @@ GET  /runs/<run_id>/dashboard
 4. 用 `claude mcp list` 验证（应显示 quant-research ✓ connected）
 ```
 
-手动启动（stdio）：
+## 亮点
 
-```powershell
-python -m quant_agent.mcp_server
+- 🤖 **住在你的 AI 助手里——头号特性。** 把内置 MCP server 接进 **Claude 或 Codex**，问一句*「NVDA 现在怎么看？」*，它就会调取本项目的真实量化分析——**看结果和聊分析在同一个对话里完成**。多数股票分析工具是独立网站，这一个直接嵌在你天天在用的 AI 里。
+- 💼 **对话管理自选与持仓。** 对 Claude 说*「帮我关注 NVDA」*或*「我 182.5 买了 15 股苹果」*——数据存在本地 `data/portfolio.json`，自动并入每一次分析，每日报告**以你的持仓与未实现盈亏开篇**（尽力取实时报价，降级用上一收盘价）。
+- 🖼️ **Artifact 级每日报告**——市场简报以自包含、明暗双主题的 HTML 文件产出，Claude 直接渲染为内嵌 artifact；同时写出 Markdown 和 JSON 以备他用。
+- 🎯 **零配置个股分析**——`analyze AAPL` 返回评级、区间收益、RSI、波动率、均线位置、支撑/止损参考位和人话版判断依据。
+- 🧩 **个性化股票池**——`quant-ai init` 生成的股票池 **2/3 来自你的自选**（你关心的公司 + 板块），**1/3 由引擎**从更大的市场中发现。
+- 🔬 **研究级回测**——横截面信号（12-1 动量、20/50 趋势、1 月反转、低波动）、信号权重搜索、**walk-forward** 稳定性分析，外加 SPY 与等权基准用来区分 alpha 和 beta。
+- 📊 **本地 dashboard 与每日报告**——免 API key 的市场情报简报和交互式行情 dashboard，全部本地服务。
+- 🛡️ **安全设计**——确定性信号 + 风控层，网络/数据异常友好降级，仅纸面模拟——永远不提交真实订单。
+
+## 每日报告与 dashboard
+
+`quant-ai market-report` 生成每日美股研究简报——你的持仓盈亏（设置后）、市场概览、关注/高风险名单、按持有周期的量化候选、免费新闻头条——Anthropic 风格设计，产出 HTML + 自包含 artifact + Markdown + JSON：
+
+<img src="assets/market-report-example.png" alt="每日市场报告——你的持仓盈亏开篇" width="820">
+
+`quant-ai serve-dashboard`（或 `write-dashboard`）渲染回测诊断——核心指标、告警、分段指标、风控检查、持仓与交易——内置 **EN / 中文** 切换：
+
+<img src="assets/dashboard-example.png" alt="本地 dashboard" width="820">
+
+## 常用命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `quant-ai analyze AAPL MSFT NVDA` | 评级一只或多只股票 |
+| `quant-ai analyze --file watchlist.txt` | 从文件读取代码并评级 |
+| `quant-ai init` | 交互式生成个性化股票池 |
+| `quant-ai analyze --watchlist` | 评级你的个性化股票池 |
+| `quant-ai run-backtest --config configs/default.yaml` | 运行研究回测 |
+| `quant-ai market-report` | 生成每日市场情报报告 |
+| `quant-ai serve-dashboard` | 启动本地 dashboard 服务 |
+| `quant-ai doctor` | 环境自检 |
+
+## 工作原理
+
+1. **数据**——默认来自 Yahoo Finance（`yfinance`）的日线 OHLCV，也支持本地 CSV/Parquet。带缓存与校验。
+2. **信号**——横截面、时点滞后的因子，逐日 z-score 标准化。
+3. **组合与风控**——在持仓数/换手/流动性约束下生成确定性目标权重。
+4. **评估**——train / validation / test 分段、walk-forward 窗口，以及基准相对指标（Sharpe、Sortino、Calmar、最大回撤、alpha/beta）。
+5. **AI（可选）**——LLM 只*审阅*和*叙述*研究，绝不生成订单；未配置 API key 时回落到离线模板。
+
+## 文档
+
+- **完整中文手册：**[docs/manual_zh.md](docs/manual_zh.md)——详细配置、回测/walk-forward、dashboard API、MCP 集成、输出文件。
+- **更新日志：**[CHANGELOG.md](CHANGELOG.md) · **贡献指南：**[CONTRIBUTING.md](CONTRIBUTING.md) · **路线图：**[roadmap.md](roadmap.md)
+
+## 测试
+
+```bash
+python -m pytest      # 72 个测试，全程无网络
+python -m ruff check quant_agent tests conftest.py
 ```
-
-可用工具（均为 `quant_` 前缀）：
-
-```text
-quant_manage_watchlist        对话管理自选池（增/删/查，自动并入所有工具的股票池）
-quant_manage_holdings         对话管理持仓（股数/成本价，查询时返回实时盈亏快照）
-quant_get_markets_data        逐标的的 AI 研究解读（评级 + 摘要 + 多空 + 关键指标）
-quant_get_recommendations     按持有周期的研究候选（长线/波段/短线/防守/激进）
-quant_generate_market_report  生成每日美股研究简报（持仓盈亏 + 新闻 + 量化，HTML artifact）
-quant_get_market_news         最新财经媒体头条
-quant_run_backtest            运行研究回测并返回核心指标
-quant_data_quality            数据质量摘要
-quant_list_reports            列出报告目录文件
-quant_read_report             读取单个报告文件
-```
-
-### 对话管理自选与持仓
-
-直接用自然语言：
-
-> 「帮我关注英伟达和特斯拉」 → 加入自选池
-> 「我 182.5 买了 15 股苹果」 → 记录持仓
-> 「我的持仓怎么样了？」 → 实时盈亏快照
-> 「生成今日美股报告」 → 报告置顶你的持仓盈亏，并以 Claude 风格 HTML artifact 直接展示
-
-数据存在本地 `data/portfolio.json`（已 gitignore，不会上传）。自选/持仓标的会自动进入滚动价格库并增量积累历史数据 —— 这正是本项目与「网页问答式 AI」的区别：分析始终基于你的持仓、自选和积累的历史数据。
-
-### 在 Claude Desktop 中注册
-
-编辑 `claude_desktop_config.json`，加入（把 `command` 换成 quant-ai 环境里的 python 路径，`cwd` 换成你的项目路径）：
-
-```json
-{
-  "mcpServers": {
-    "quant-research": {
-      "command": "<你的 conda 环境>\\python.exe",
-      "args": ["-m", "quant_agent.mcp_server"],
-      "cwd": "<你的项目路径>"
-    }
-  }
-}
-```
-
-> 提示：环境内 python 路径可用 `python -c "import sys; print(sys.executable)"` 查询。
-
-### 在 Claude Code 中注册
-
-在项目目录下执行（同样用环境内的 python）：
-
-```powershell
-claude mcp add quant-research -- "<你的 conda 环境>\python.exe" -m quant_agent.mcp_server
-```
-
-注册后即可直接对 Claude 说「看看 NVDA 的研究解读」「帮我关注特斯拉」「我 182.5 买了 15 股苹果」「今天有哪些适合长线的候选」「生成今日美股简报」，Claude 会调用对应工具、拿到项目真实量化数据（含你的自选与持仓）再做分析。所有结论均为研究信号，不构成投资建议。
-
-数据时效：价格数据缓存超过 `data.cache_ttl_hours`（默认 6 小时）会自动刷新到最新交易日，所以正常调用就是当前数据。若想强制立即拉取最新，可让 Claude 在调用时带上 `refresh: true`（如「刷新数据后生成今日简报」），相关工具会忽略缓存重新下载。
-
-## 核心配置说明
-
-### 数据源
-
-默认使用 `yfinance`：
-
-```yaml
-data:
-  source: yfinance
-  start: "2020-01-01"
-  end: null
-  cache_dir: data/cache
-  universe_path: configs/universe_default.csv
-  cache_ttl_hours: 6        # 开放区间(end=null)缓存超过该小时数自动重新下载；null 表示永不过期
-```
-
-关于数据时效：当 `end: null`（拉到最新）时，yfinance 缓存会在超过 `cache_ttl_hours`（默认 6 小时）后自动刷新到最新交易日，因此正常调用不会停留在旧日期。`end` 写成固定日期时缓存视为不可变历史、永不过期。MCP 工具还支持 `refresh: true` 参数强制立即重新下载（较慢，按需使用）。
-
-读取本地 CSV：
-
-```yaml
-data:
-  source: csv
-  path: data/prices.csv
-```
-
-读取本地 Parquet：
-
-```yaml
-data:
-  source: parquet
-  path: data/prices.parquet
-```
-
-读取本地目录：
-
-```yaml
-data:
-  source: local
-  path: data/local_prices
-```
-
-价格数据标准字段：
-
-```text
-date,symbol,open,high,low,close,adj_close,volume
-```
-
-### 策略信号
-
-```yaml
-strategy:
-  benchmark: SPY
-  top_n: 5
-  rebalance_frequency: M
-  initial_cash: 100000
-  transaction_cost_bps: 10
-  slippage_bps: 5
-  signal_weights:
-    momentum_12_1: 1.0
-    trend_20_50: 1.0
-    reversal_1m: 1.0
-    low_volatility: 1.0
-    ml_rank: 1.0
-```
-
-### 风控
-
-```yaml
-risk:
-  max_position_weight: 0.25
-  max_positions: 5
-  min_avg_dollar_volume: 10000000
-  max_turnover: 2.0
-  long_only: true
-```
-
-### 分段评估
-
-```yaml
-evaluation:
-  periods:
-    - name: train
-      start: "2020-01-01"
-      end: "2022-12-31"
-    - name: validation
-      start: "2023-01-01"
-      end: "2024-12-31"
-    - name: test
-      start: "2025-01-01"
-      end: null
-```
-
-### 权重搜索和 walk-forward
-
-```yaml
-optimization:
-  enabled: true
-  train_period: train
-  validation_period: validation
-  objective: sharpe
-  max_drawdown_floor: -0.5
-  walk_forward_enabled: true
-```
-
-### ML ranking
-
-```yaml
-ml:
-  enabled: true
-  train_period: train
-  prediction_horizon_days: 21
-  model_version: ridge_v1
-  feature_version: technical_v1
-```
-
-### LLM 审阅
-
-默认关闭：
-
-```yaml
-llm:
-  enabled: false
-  provider: openai-compatible
-  model: gpt-4.1-mini
-  endpoint: null
-  api_key_env: OPENAI_API_KEY
-  prompt_version: research_review_v1
-```
-
-启用时：
-
-```yaml
-llm:
-  enabled: true
-  api_key_env: OPENAI_API_KEY
-```
-
-如果没有设置 API key，系统会回落到离线模板审阅。
-
-### Dashboard 安全
-
-`configs/full_roadmap.yaml` 当前配置：
-
-```yaml
-dashboard:
-  service_dir: reports/full_roadmap/service
-  runs_dir: reports/full_roadmap/runs
-
-dashboard_security:
-  enabled: false   # 本地默认关闭；对外暴露时改为 true 并设置 token_env
-  token_env: QUANT_AGENT_DASHBOARD_TOKEN
-  audit_log_path: reports/full_roadmap/service/dashboard_audit.jsonl
-```
-
-启用认证后，不要把真实 token 写进配置文件。推荐使用环境变量：
-
-```powershell
-$env:QUANT_AGENT_DASHBOARD_TOKEN = "your-local-secret"
-```
-
-## 输出文件说明
-
-默认回测输出到：
-
-```text
-reports/latest/
-```
-
-全功能基础版当前报告快照输出到：
-
-```text
-reports/full_roadmap/current/
-```
-
-服务状态和历史运行输出到：
-
-```text
-reports/full_roadmap/service/
-reports/full_roadmap/runs/<run_id>/
-```
-
-常见输出文件：
-
-```text
-summary.md                                      人类可读研究摘要
-audit.json                                      完整配置、指标、检查和输出清单
-equity_curve.csv                                策略权益曲线
-benchmark_equity.csv                            SPY benchmark 权益曲线
-equal_weight_equity.csv                         默认股票池等权 baseline
-positions.csv                                   持仓
-trades.csv                                      交易记录
-period_metrics.csv                              train/validation/test 分段指标
-exposure_by_symbol.csv                          标的暴露
-signal_diagnostics.csv                          单信号诊断
-signal_weight_search.csv                        权重搜索结果
-recommendations.csv                             分类型研究候选总表
-recommendations.json                            分类型研究候选 JSON
-recommendations_long_term.csv                   长期研究候选
-recommendations_swing.csv                       波段研究候选
-recommendations_short_term.csv                  短期研究候选
-recommendations_defensive.csv                   防守型研究候选
-recommendations_aggressive.csv                  激进型研究候选
-recommended_signal_weights.json                 validation 推荐权重
-recommended_equity_curve.csv                    recommended strategy 权益曲线
-walk_forward_signal_search.csv                  walk-forward 搜索结果
-walk_forward_stability.csv                      walk-forward 稳定性排名
-walk_forward_recommended_signal_weights.json    walk-forward 聚合推荐权重
-ml_feature_matrix.csv                           ML 特征矩阵
-ml_predictions.csv                              ML 预测
-ml_diagnostics.json                             ML 诊断
-data_quality.json                               数据质量报告
-alerts.json                                     告警
-notifications.json                              通知记录
-proposed_orders.csv                             纸面订单计划
-paper_trading_audit.json                        纸面订单风控审计
-dashboard.html                                  静态 dashboard
-runtime_status.json                             本地服务运行状态
-run_history.json                                本地服务运行历史
-dashboard_audit.jsonl                           dashboard API 操作审计
-```
-
-如果你的 `reports/full_roadmap/` 目录里已经有旧版平铺输出，可以先保留不动；新运行会写入 `current/`、`service/` 和 `runs/`。确认新结构正常后，再把旧的根目录 CSV/JSON/HTML 报告移动到归档目录，例如 `reports/full_roadmap/archive_flat_legacy/`。
-
-## 测试和验证
-
-运行全部测试：
-
-```powershell
-python -m pytest
-```
-
-运行 Python 编译检查：
-
-```powershell
-python -m compileall -q quant_agent tests
-```
-
-当前测试覆盖：
-
-- 数据标准化和数据质量。
-- CSV 股票池解析。
-- 本地 CSV/Parquet 数据源。
-- 信号滞后和信号组合。
-- 分类型研究买入候选输出。
-- 风控约束。
-- 完整 pipeline 输出。
-- benchmark-relative 指标。
-- train/validation/test 分段指标。
-- 信号权重解析。
-- 权重搜索和推荐权重。
-- walk-forward 搜索和稳定性。
-- ML ranking signal。
-- 纸面订单计划。
-- 通知 outbox。
-- 聊天管理的自选/持仓（存储、盈亏快照、universe 叠加）。
-- MCP 工具层（自选/持仓管理、报告 artifact 输出）。
-- dashboard runtime status。
-- dashboard API token 鉴权。
-- dashboard 操作审计日志。
-
-## 当前限制
-
-- 默认数据源 `yfinance` 适合原型研究，不保证生产级 point-in-time 正确性。
-- 默认股票池是大型流动性标的样例，不是完整美股股票池。
-- 还没有 survivorship-bias-free universe。
-- 还没有完整基本面、新闻、财报电话会或 SEC filing 数据。
-- 当前回测是研究级 close-to-close 模型，不是生产级事件驱动撮合。
-- ML ranking 是基础版，没有模型注册中心、特征存储服务或漂移监控。
-- LLM 审阅是基础版，没有多 provider 路由。
-- 纸面订单计划是研究模拟，项目按定位不接入任何 broker API 或下单/审批链路。
-- Dashboard 已有本地 API token 认证和操作审计，但不是多用户权限系统。
-- 通知 outbox 和 webhook 是基础版，没有生产级投递重试、签名校验和告警升级策略。
-
-## 推荐下一步
-
-1. 接入更可靠的数据供应商，并建立 survivorship-bias-free universe。
-2. 强化 point-in-time 数据治理、数据版本和数据质量阻断规则。
-3. 把 PaperBroker 扩展成完整 broker sandbox，包括订单生命周期、成交回报和持仓对账。
-4. 增加 dashboard 多用户权限、会话管理和更细粒度的操作审计。
-5. 增加通知投递保障，包括 webhook 签名、重试、死信和告警升级。
-6. 为 ML 增加模型注册、特征存储、漂移监控和可重复训练任务。
-7. 为 LLM 审阅增加多 provider 路由、人工确认和更强的安全策略。
 
 ## 重要声明
 
-本项目只用于工程研究和量化策略原型验证，不构成投资建议。任何真实交易都需要独立完成数据校验、合规审查、风险控制、broker sandbox 验证、人工审批和实盘监控。
+本项目仅用于**量化研究与学习**。它分析历史价格并产出研究信号——**不构成投资建议**，也**不是**交易授权。市场有风险，决策需自负。
+
+## 许可证
+
+[MIT](LICENSE)

@@ -3,7 +3,7 @@
 > **Quant research for US stocks, built to live inside your AI assistant.**
 > Plug it into **Claude or Codex** via [MCP](https://modelcontextprotocol.io) and ask about any ticker — get explainable ratings, key levels, and the reasoning, then *discuss it in the same chat*. Also works as a one-command CLI.
 
-[English](README.md) | [中文](README_CN.md)
+English | [中文](README_CN.md)
 
 [![CI](https://github.com/TingdeLiu/quant.ai/actions/workflows/ci.yml/badge.svg)](https://github.com/TingdeLiu/quant.ai/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -42,7 +42,7 @@ Then just ask, in the same chat where you work:
 
 > *"What's the read on NVDA?"*  ·  *"Watch TSLA for me."*  ·  *"I bought 15 AAPL at 182.5 — track it."*  ·  *"How are my positions doing?"*  ·  *"Generate today's market report."*
 
-Claude (or Codex) calls into real project data, shows you the quant analysis, and you discuss it inline — no separate website, no copy-pasting. The daily report opens with **your holdings P&L** and renders as a polished **HTML artifact**. See [README_CN.md](README_CN.md#集成到-claudemcp) for Claude Desktop / Codex config.
+Claude (or Codex) calls into real project data, shows you the quant analysis, and you discuss it inline — no separate website, no copy-pasting. The daily report opens with **your holdings P&L** and renders as a polished **HTML artifact**. See the [manual](docs/manual_zh.md#集成到-claudemcp) (Chinese) for Claude Desktop / Codex config.
 
 **Let your AI assistant install it** — paste this into Claude Code (or any AI CLI) and it can set everything up:
 
@@ -98,7 +98,7 @@ Install https://github.com/TingdeLiu/quant.ai as an MCP server:
 
 ## Documentation
 
-- **Full manual (Chinese):** [README_CN.md](README_CN.md) — detailed config, backtest/walk-forward, dashboard API, MCP integration, output files.
+- **Full manual (Chinese):** [docs/manual_zh.md](docs/manual_zh.md) — detailed config, backtest/walk-forward, dashboard API, MCP integration, output files.
 - **Changelog:** [CHANGELOG.md](CHANGELOG.md) · **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md) · **Roadmap:** [roadmap.md](roadmap.md)
 
 ## Tests
