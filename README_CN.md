@@ -22,9 +22,9 @@ quant-ai analyze AAPL     # 秒级给出评级与关键价位
 
 ---
 
-`quant.ai` 是一个美股日线量化研究与回测 agent 原型。当前版本已经打通从数据读取、信号生成、组合构建、风险检查、回测评估、ML ranking、报告输出、纸面订单计划、本地 dashboard、API token 认证、操作审计日志到人工审批的基础闭环。
+`quant.ai` 是一个美股日线量化研究与回测 agent 原型。当前版本已经打通从数据读取、信号生成、组合构建、风险检查、回测评估、ML ranking、报告输出、纸面订单计划、本地 dashboard、API token 认证到操作审计日志的基础闭环，并通过 MCP 内嵌进 Claude/Codex：对话式管理自选池与持仓，每日报告开头即你的持仓盈亏，报告以 Claude 风格 HTML artifact 呈现。
 
-这个项目的定位是研究和验证，不是实盘交易系统。默认不会提交真实订单；AI/LLM 只用于研究审阅、报告解释和风险提示，不直接生成 broker order。
+这个项目的定位是研究和验证，不是实盘交易系统。不会提交真实订单，也不提供任何下单/审批链路；AI/LLM 只用于研究审阅、报告解释和风险提示，不直接生成 broker order。持仓是用户口述的记账数据，仅用于研究上下文。
 
 ## 项目已经完成了什么
 
@@ -78,8 +78,6 @@ quant-ai analyze AAPL     # 秒级给出评级与关键价位
 - 输出 walk-forward 稳定性排名：`walk_forward_stability.csv`。
 - 输出 walk-forward 聚合推荐权重：`walk_forward_recommended_signal_weights.json`。
 - 提供 `write-recommended-config` 命令，把推荐权重写成独立配置。
-- 提供 `compare-reports` 命令，对多个策略报告做横向对比。
-- 输出 comparison CSV、Markdown、SVG 图表和 HTML 汇总页。
 
 ### ML ranking 基础版
 
@@ -107,8 +105,8 @@ quant-ai analyze AAPL     # 秒级给出评级与关键价位
   - 「高风险」标的：高波动、深回撤、近期急跌或显著低于 52 周高点。
   - 分类型量化候选（长期 / 波段 / 短期 / 防守 / 激进）。
 - 当 `llm.enabled` 且配置了 API key 时，会用大模型把新闻和量化数据综合成自然语言分析；否则回落到结构化模板，无需任何 key 也能用。
-- 输出文件：`market_intel.json`、`market_intel.md`、`market_intel.html`。
-- HTML 报告采用 Anthropic / Claude 品牌视觉（暖米白底、赤陶橙点缀、Poppins 标题 + Lora 正文、绿涨橙红跌），核心板块为「按持有周期的研究推荐」（长线 / 中线·波段 / 短线 / 防守 / 激进），每只标的带价格、强度条和信号依据。
+- 输出文件：`market_intel.json`、`market_intel.md`、`market_intel.html`、`market_intel_artifact.html`（自包含、明暗双主题，供 Claude 直接渲染为 artifact）。
+- HTML 报告采用 Anthropic / Claude 品牌视觉（暖米白底、赤陶橙点缀、Poppins 标题 + Lora 正文、绿涨橙红跌），设有持仓时报告置顶「我的持仓」盈亏段，核心板块为「按持有周期的研究推荐」（长线 / 中线·波段 / 短线 / 防守 / 激进），每只标的带价格、强度条和信号依据。
 - 严格定位为研究，不构成投资建议，也不会生成任何下单指令或实盘授权。
 
 ### Markets 实时分析仪表盘
@@ -153,21 +151,22 @@ quant-ai analyze AAPL     # 秒级给出评级与关键价位
   - `notification_outbox.csv`
 - 支持可选 webhook channel，通过环境变量读取 webhook URL。
 
-### 纸面交易与人工审批基础版
+### 纸面订单计划（研究模拟）
 
-- 实现 broker 抽象接口。
-- 实现 PaperBroker 预览/受控提交模拟器。
 - 从 target positions 和 current positions 生成 proposed orders。
 - 支持 current positions CSV 输入。
 - 支持 max order notional 和 gross notional 风控检查。
 - 输出：
   - `proposed_orders.csv`
   - `paper_trading_audit.json`
-- 支持 dashboard API approve/reject。
-- 审批通过后输出：
-  - `paper_order_approval.json`
-  - `broker_preview.csv`
-- 默认不提交真实订单，`allow_broker_submit_after_approval` 默认为 `false`。
+- 纯研究模拟：项目不含任何 broker 提交或人工审批链路。
+
+### 对话管理的自选与持仓（MCP）
+
+- `data/portfolio.json` 单文件存储（已 gitignore）：`watchlist` + `holdings`（股数/成本价/备注）。
+- 通过 MCP 工具 `quant_manage_watchlist` / `quant_manage_holdings` 对话式增删，原子写入。
+- 自选与持仓标的自动并入所有研究工具的 universe，且滚动价格库从旧缓存播种、按标的增量补齐（加自选不再整库重下）。
+- 每日报告置顶「我的持仓」段：现价（尽力实时、降级上一收盘）、当日变动、市值、成本、未实现盈亏与合计。
 
 ### 本地 dashboard 与服务端
 
@@ -189,7 +188,6 @@ quant-ai analyze AAPL     # 秒级给出评级与关键价位
   - 触发新回测。
   - 查看 run history。
   - 查看 alerts、notifications 和 audit。
-  - 对纸面订单执行 approve/reject。
 - 每次服务端触发运行都会生成独立 run 目录：
   - `reports/full_roadmap/runs/<run_id>/`
 - 服务端维护：
@@ -201,7 +199,7 @@ quant-ai analyze AAPL     # 秒级给出评级与关键价位
   - 服务端校验 `Authorization: Bearer <token>` 或 `X-API-Token`。
 - 已实现 dashboard 操作审计日志：
   - `reports/full_roadmap/service/dashboard_audit.jsonl`
-  - 记录触发回测、approve/reject 和未授权 API 访问。
+  - 记录触发回测、报告生成和未授权 API 访问。
 
 ## 项目目录结构
 
@@ -220,10 +218,11 @@ quant.ai/
     ml.py                      ML ranking signal
     llm.py                     LLM 审阅 client
     paper.py                   纸面订单计划
-    broker.py                  Broker/PaperBroker
+    holdings.py                聊天管理的自选/持仓存储与盈亏快照
+    market_intel.py            每日市场报告（MD/HTML/artifact 渲染）
+    mcp_server.py              MCP server（Claude/Codex 集成入口）
     alerts.py                  告警
     notifications.py           通知 outbox/webhook
-    approvals.py               纸面订单审批
     dashboard.py               静态 dashboard 生成
     server.py                  本地 dashboard 服务
     reports.py                 报告输出
@@ -414,9 +413,10 @@ python -m quant_agent market-report --config configs/full_roadmap.yaml
 输出（默认写入 `report.output_dir`，便于 dashboard 文件列表直接展示）：
 
 ```text
-market_intel.html    可读 HTML 报告
-market_intel.md      Markdown 报告
-market_intel.json    结构化数据
+market_intel.html             可读 HTML 报告（完整文档，浏览器直开）
+market_intel_artifact.html    自包含 HTML 片段（Claude artifact 渲染用，明暗双主题）
+market_intel.md               Markdown 报告
+market_intel.json             结构化数据
 ```
 
 也可以在本地服务页面点击「生成今日美股分析报告」按钮触发，完成后点「打开美股分析报告」查看。
@@ -450,26 +450,6 @@ python -m quant_agent write-recommended-config `
 python -m quant_agent run-backtest --config configs/walk_forward_recommended.yaml
 ```
 
-### 生成多策略对比报告
-
-```powershell
-python -m quant_agent compare-reports `
-  reports/latest `
-  reports/recommended `
-  reports/walk_forward_recommended `
-  --output-dir reports/comparison
-```
-
-输出：
-
-```text
-reports/comparison/strategy_comparison.csv
-reports/comparison/strategy_comparison.md
-reports/comparison/equity_comparison.svg
-reports/comparison/drawdown_comparison.svg
-reports/comparison/index.html
-```
-
 ## 启动本地 dashboard 服务
 
 `configs/full_roadmap.yaml` 默认已**关闭** dashboard API token 认证（`dashboard_security.enabled: false`），本地单机直接启动即可：
@@ -484,7 +464,7 @@ python -m quant_agent serve-dashboard --config configs/full_roadmap.yaml --port 
 http://127.0.0.1:8765
 ```
 
-无需输入 token，即可查看状态、刷新报告文件、触发回测、生成美股分析报告、查看操作审计和执行纸面订单审批。
+无需输入 token，即可查看状态、刷新报告文件、触发回测、生成美股分析报告和查看操作审计。
 
 如需对外暴露服务，建议改回 `dashboard_security.enabled: true` 并设置 token，再启动：
 
@@ -557,8 +537,6 @@ GET  /api/markets-data
 GET  /markets
 GET  /m/<asset>
 POST /api/run
-POST /api/runs/<run_id>/approve-paper
-POST /api/runs/<run_id>/reject-paper
 GET  /dashboard
 GET  /report/<file>
 GET  /runs/<run_id>/dashboard
@@ -566,9 +544,19 @@ GET  /runs/<run_id>/dashboard
 
 ## 集成到 Claude（MCP）
 
-项目提供一个本地 MCP（Model Context Protocol）server，把研究能力暴露为工具，让 Claude 桌面端 / Claude Code 用自然语言驱动。设计理念是 **项目当「工具 + 数据」层，Claude 当「分析大脑」**。所有工具均为只读 / 研究导向，**不暴露任何下单、纸面订单审批或实盘授权能力**。
+项目提供一个本地 MCP（Model Context Protocol）server，把研究能力暴露为工具，让 Claude 桌面端 / Claude Code 用自然语言驱动。设计理念是 **项目当「工具 + 数据」层，Claude 当「分析大脑」**。所有工具均为研究导向，**不暴露任何下单或实盘授权能力**；唯一的「写入」是你自己的自选池与持仓记账。
 
-启动（stdio）：
+**让 AI 帮你安装** —— 把下面这段直接丢给 Claude Code（或任何 AI CLI）即可：
+
+```text
+把 https://github.com/TingdeLiu/quant.ai 安装为 MCP server：
+1. git clone https://github.com/TingdeLiu/quant.ai && cd quant.ai
+2. pip install -e .
+3. claude mcp add quant-research -- python -m quant_agent.mcp_server
+4. 用 `claude mcp list` 验证（应显示 quant-research ✓ connected）
+```
+
+手动启动（stdio）：
 
 ```powershell
 python -m quant_agent.mcp_server
@@ -577,15 +565,28 @@ python -m quant_agent.mcp_server
 可用工具（均为 `quant_` 前缀）：
 
 ```text
+quant_manage_watchlist        对话管理自选池（增/删/查，自动并入所有工具的股票池）
+quant_manage_holdings         对话管理持仓（股数/成本价，查询时返回实时盈亏快照）
 quant_get_markets_data        逐标的的 AI 研究解读（评级 + 摘要 + 多空 + 关键指标）
 quant_get_recommendations     按持有周期的研究候选（长线/波段/短线/防守/激进）
-quant_generate_market_report  生成每日美股研究简报（新闻 + 量化）
+quant_generate_market_report  生成每日美股研究简报（持仓盈亏 + 新闻 + 量化，HTML artifact）
 quant_get_market_news         最新财经媒体头条
 quant_run_backtest            运行研究回测并返回核心指标
 quant_data_quality            数据质量摘要
 quant_list_reports            列出报告目录文件
 quant_read_report             读取单个报告文件
 ```
+
+### 对话管理自选与持仓
+
+直接用自然语言：
+
+> 「帮我关注英伟达和特斯拉」 → 加入自选池
+> 「我 182.5 买了 15 股苹果」 → 记录持仓
+> 「我的持仓怎么样了？」 → 实时盈亏快照
+> 「生成今日美股报告」 → 报告置顶你的持仓盈亏，并以 Claude 风格 HTML artifact 直接展示
+
+数据存在本地 `data/portfolio.json`（已 gitignore，不会上传）。自选/持仓标的会自动进入滚动价格库并增量积累历史数据 —— 这正是本项目与「网页问答式 AI」的区别：分析始终基于你的持仓、自选和积累的历史数据。
 
 ### 在 Claude Desktop 中注册
 
@@ -872,13 +873,13 @@ python -m compileall -q quant_agent tests
 - 权重搜索和推荐权重。
 - walk-forward 搜索和稳定性。
 - ML ranking signal。
-- 纸面订单计划和 PaperBroker。
+- 纸面订单计划。
 - 通知 outbox。
-- 纸面订单审批。
+- 聊天管理的自选/持仓（存储、盈亏快照、universe 叠加）。
+- MCP 工具层（自选/持仓管理、报告 artifact 输出）。
 - dashboard runtime status。
 - dashboard API token 鉴权。
 - dashboard 操作审计日志。
-- 多策略 comparison report。
 
 ## 当前限制
 

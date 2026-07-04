@@ -8,6 +8,11 @@
 ## [Unreleased]
 
 ### 新增
+- **对话管理自选与持仓（MCP）**：新增 `quant_manage_watchlist` / `quant_manage_holdings` 工具，「帮我关注 NVDA」「我 182.5 买了 15 股 AAPL」即可增删；数据存本地 `data/portfolio.json`（gitignore、原子写、损坏即报错防覆盖），自选/持仓标的自动并入所有研究工具的股票池。
+- **每日报告置顶「我的持仓」**：现价（尽力实时报价、断网降级上一收盘，`quotes_source` 标注口径）、当日变动、市值、成本、未实现盈亏与合计；持仓标的优先进入个股新闻抓取。
+- **HTML artifact 报告**：新增 `market_intel_artifact.html` —— 自包含（零外链，满足 artifact 严格 CSP）、明暗双主题（跟随系统 + 宿主 `data-theme`）的 Claude 品牌视觉 HTML 片段；`quant_generate_market_report` 现在真正落盘全部报告文件并返回 `artifact_html_path`，MCP instructions 描述三级呈现路径（本地文件 artifact → `quant_read_report` 取 HTML → Markdown 兜底）。
+- **滚动价格库播种**：自选池变化产生新缓存键时，自动从旧缓存播种已有标的历史、按标的增量补缺（新标的才全量下载），加自选不再整库重下；起点在未来的标的直接跳过请求。
+- 仓库根新增 `CLAUDE.md`：给 clone 用户的 AI 助手看的项目约定（测试离线、双语渲染、报告-artifact 呈现路径、portfolio.json 语义）。
 - 双语输出（**英文默认 / 中文可选**），全栈覆盖：新增轻量 `i18n` 模块；`analyze`（评级/信心/理由/CLI 表格/Markdown/免责声明）、`market-report`（每日报告 HTML+MD 全文）、`init` 全流程问答、以及静态/服务端 dashboard 默认语言都按所选语言渲染。`quant-ai init` 首问语言（英文默认），偏好写入 profile/`my.yaml`；`config.language` 贯穿；`analyze --lang en/zh`、`write-dashboard --lang` 可显式指定。
 - `init` 命令：首次使用交互式引导，问几个问题（感兴趣的板块、额外关注的公司、风险偏好）即可生成**个性化股票池**——2/3 来自用户自选（公司 + 板块的代表股），1/3 由系统在全市场候选目录里挑用户没选到的强势标的（按风险偏好对应的横截面信号打分）。输出 `configs/my_universe.csv` + `configs/my.yaml` + `configs/profile.json`；支持 `--non-interactive` / `--no-discovery`，无网络时优雅降级（只写自选部分并提示）。
 - `refresh-universe` 命令：用已保存的偏好重算「发现池」1/3（市场会变），自选 2/3 不变。
@@ -22,9 +27,14 @@
 - 开源工程基建：`pyproject.toml`（可 `pip install -e .`，提供 `quant-ai` 命令入口）、`LICENSE`（MIT）、`CONTRIBUTING.md`、GitHub Issue/PR 模板、CI（Python 3.11 / 3.12 自动跑测试）、`CHANGELOG.md`。
 
 ### 变更
+- 配置新增 `portfolio.path`（默认 `data/portfolio.json`）；CLI `market-report` 默认配置改为 `configs/my.yaml`（存在时），并同样叠加自选/持仓。
+- 报告 HTML 渲染层重构：CSS 拆分为明/暗调色板与 `.qa-report` 作用域组件层，整页文档与 artifact 片段共享全部 section 构建器。
 - 工程基建：引入 `ruff`（lint，CI 强制门禁）；CI 测试矩阵新增 `windows-latest`，并加入覆盖率统计。
 - 测试拆分：原 900+ 行单文件按主题拆为 `test_data` / `test_config` / `test_pipeline` / `test_market` / `test_server` / `test_analyze`，共享构造器收敛到 `tests/_helpers.py`。
 - 控制台 HTML 生成从 `server.py` 抽离到 `quant_agent/web_templates.py`，`server.py` 体积减少约三分之一。
+
+### 移除
+- 与 research-only 定位冲突或无引用的模块：`adapters.py`（死代码）、`broker.py`、`approvals.py`（含 dashboard 的 approve/reject 路由与 UI）、`comparison.py` 及 `compare-reports` 命令。dashboard 控制台、行情页、AI 对话完整保留。
 
 ### 修复
 - 参考止损位现在正确低于支撑位；价格跌破所有均线时支撑回退到 52 周低点。
