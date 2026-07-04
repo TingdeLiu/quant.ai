@@ -24,10 +24,10 @@ from xml.etree import ElementTree
 
 import pandas as pd
 
+from quant_agent import holdings as holdings_store
 from quant_agent.config import AppConfig
 from quant_agent.data import load_prices
 from quant_agent.features import build_signals
-from quant_agent.holdings import build_holdings_snapshot, fetch_live_quotes, load_portfolio
 from quant_agent.i18n import normalize_language, tr
 from quant_agent.llm import generate_market_narrative
 from quant_agent.recommendations import RECOMMENDATION_PROFILES
@@ -76,12 +76,12 @@ def _z_label(column: str, lang: str) -> str:
 
 def build_market_report(
     config: AppConfig,
-    quote_fetcher: Callable[[list[str]], dict[str, float]] = fetch_live_quotes,
+    quote_fetcher: Callable[[list[str]], dict[str, float]] | None = None,
 ) -> dict[str, Any]:
     """Build the full daily market intelligence report payload.
 
-    ``quote_fetcher`` is injectable for offline tests; it is only invoked when the
-    chat-managed portfolio actually has holdings.
+    ``quote_fetcher`` is injectable for offline tests (None -> live yfinance quotes);
+    it is only invoked when the chat-managed portfolio actually has holdings.
     """
     mi = config.market_intel
     lang = normalize_language(config.language)
@@ -127,13 +127,15 @@ def build_market_report(
     # Chat-managed portfolio: holdings snapshot (P&L) + held symbols lead the news focus.
     portfolio: dict[str, Any] = {}
     try:
-        portfolio = load_portfolio(config.portfolio_path)
+        portfolio = holdings_store.load_portfolio(config.portfolio_path)
     except Exception as exc:
         report["warnings"].append(f"portfolio_unreadable: {exc}")
     holding_symbols = [h["symbol"] for h in portfolio.get("holdings", [])]
     if holding_symbols:
-        quotes = quote_fetcher(holding_symbols)  # {} on network failure -> last close
-        report["holdings"] = build_holdings_snapshot(portfolio, prices, quotes)
+        # 运行时经模块属性取默认 fetcher（而非 import 期绑定），保证可注入/可 monkeypatch。
+        fetcher = quote_fetcher if quote_fetcher is not None else holdings_store.fetch_live_quotes
+        quotes = fetcher(holding_symbols)  # {} on network failure -> last close
+        report["holdings"] = holdings_store.build_holdings_snapshot(portfolio, prices, quotes)
         focus = list(holding_symbols)
         focus += [symbol for symbol in analysis_symbols if symbol not in focus]
         analysis_symbols = focus[:12]

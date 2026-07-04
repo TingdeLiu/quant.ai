@@ -3,13 +3,15 @@
 
 Exposes the project's research and reporting capabilities as Model Context
 Protocol tools so an MCP client (Claude Desktop, Claude Code) can drive them in
-natural language: generate the daily market report, read per-symbol AI analysis,
-pull categorized recommendations, run a research backtest, and browse outputs.
+natural language: manage the user's chat-managed watchlist and holdings, generate
+the daily market report (HTML artifact-ready), read per-symbol AI analysis, pull
+categorized recommendations, run a research backtest, and browse outputs.
 
 Design principle: this server is the *tools + data* layer; the connected model is
 the analytical *brain*. Every tool is research-only. None submit broker orders,
 approve paper trades, or authorize live trading — those capabilities are
-deliberately not exposed here.
+deliberately not exposed here. Holdings are the user's self-reported bookkeeping,
+never broker state.
 
 Run locally over stdio:
     python -m quant_agent.mcp_server
@@ -20,27 +22,38 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, ConfigDict, Field
 
+from quant_agent import holdings as holdings_store
 from quant_agent.config import AppConfig, load_config
 from quant_agent.data import load_prices
 from quant_agent.data_quality import build_data_quality_report
 from quant_agent.features import build_signals
-from quant_agent.market_intel import _collect_feeds, build_market_report, render_markdown
+from quant_agent.market_intel import _collect_feeds, build_market_report, render_markdown, write_market_report
 from quant_agent.markets_data import build_markets_data
 from quant_agent.portfolio import build_target_positions
 from quant_agent.recommendations import RECOMMENDATION_PROFILES, build_recommendations
 
 MCP_INSTRUCTIONS = (
     "US-equity quant research tools (research only — never orders). "
-    "When the user asks for the daily market report, call quant_generate_market_report and present "
-    "the returned `report_markdown` to the user AS AN ARTIFACT — a Markdown document titled like "
-    "'美股当日报告 · <as_of_date>' (or 'US Market Report · <date>') — rather than only summarizing it "
-    "inline in chat. Keep the disclaimer at the end. You may add a short note before the artifact. "
-    "For the other tools, answer normally."
+    "The user's chat-managed watchlist and holdings live in this server: when the user says "
+    "something like 'watch NVDA for me' / '帮我关注英伟达', call quant_manage_watchlist; for "
+    "'I bought 15 AAPL at 182.5' / '我 182.5 买了 15 股苹果', call quant_manage_holdings. "
+    "Symbols managed there are automatically covered by every other tool, and the daily report "
+    "opens with the user's holdings P&L. "
+    "Daily report: call quant_generate_market_report and present the report AS AN ARTIFACT, "
+    "preferring the polished HTML: "
+    "(1) if you can read local files (e.g. Claude Code), publish the self-contained HTML file at "
+    "`artifact_html_path` as an HTML artifact; "
+    "(2) if not (e.g. Claude Desktop), call quant_read_report with name='market_intel_artifact.html' "
+    "and render that HTML as a text/html artifact (you may wrap it in a minimal "
+    "<!doctype html> shell with <meta charset=\"utf-8\">); "
+    "(3) only if HTML artifacts are unsupported, fall back to `report_markdown` as a Markdown "
+    "artifact titled 'US Market Report · <as_of_date>' (or '美股当日报告 · <date>'). "
+    "Always keep the disclaimer at the end. For the other tools, answer normally."
 )
 mcp = FastMCP("quant_research_mcp", instructions=MCP_INSTRUCTIONS)
 
@@ -68,7 +81,8 @@ def _load(config: str) -> AppConfig:
             f"Config not found: {config_path}. Provide a path relative to the project root "
             f"(e.g. 'configs/full_roadmap.yaml')."
         )
-    return load_config(config_path)
+    # 叠加聊天管理的自选/持仓：所有工具的 universe 自动覆盖用户标的。
+    return holdings_store.apply_portfolio_universe(load_config(config_path))
 
 
 def _err(exc: Exception) -> dict[str, Any]:
@@ -129,9 +143,163 @@ class ReadReportInput(ConfigInput):
     name: str = Field(..., description="Report file name within the report output dir (e.g. 'market_intel.md', 'summary.md').", min_length=1)
 
 
+class WatchlistInput(ConfigInput):
+    action: Literal["list", "add", "remove"] = Field(
+        default="list",
+        description="list = show the chat-managed watchlist; add/remove = modify it.",
+    )
+    symbols: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description="Tickers for add/remove (e.g. ['NVDA', 'TSLA']). Ignored for list.",
+    )
+
+
+class PositionInput(_Base):
+    symbol: str = Field(..., min_length=1, max_length=12, description="Ticker, e.g. 'AAPL'.")
+    shares: float | None = Field(default=None, gt=0, description="Share count. Required for action='set'.")
+    cost_basis: float | None = Field(default=None, gt=0, description="Optional average cost per share (USD).")
+    note: str | None = Field(default=None, max_length=200, description="Optional free-form note.")
+
+
+class HoldingsInput(ConfigInput):
+    action: Literal["list", "set", "remove"] = Field(
+        default="list",
+        description="list = holdings with P&L snapshot; set = insert/replace positions; remove = delete by symbol.",
+    )
+    positions: list[PositionInput] = Field(
+        default_factory=list,
+        max_length=50,
+        description="For set: full rows (symbol + shares, optional cost_basis/note). For remove: only symbol is used.",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Tools
 # --------------------------------------------------------------------------- #
+
+
+@mcp.tool(
+    name="quant_manage_watchlist",
+    annotations={"title": "Manage chat watchlist", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+async def quant_manage_watchlist(params: WatchlistInput) -> dict[str, Any]:
+    """List, add, or remove symbols on the user's chat-managed watchlist.
+
+    The watchlist lives in ``data/portfolio.json`` (config key ``portfolio.path``) and is an
+    overlay on the configured universe: symbols added here are automatically covered by every
+    research tool (market data, daily report, recommendations, backtest) and survive
+    ``quant-ai refresh-universe``. The rolling price database backfills new symbols on the next
+    data-touching call — seeded from existing caches, so it is incremental, not a full re-download.
+
+    Args:
+        params (WatchlistInput):
+            - config (str): config path relative to the project root.
+            - action (str): 'list' (default) | 'add' | 'remove'.
+            - symbols (list[str]): tickers for add/remove; ignored for list.
+
+    Returns:
+        dict: { action, watchlist, holdings_symbols, updated_at, portfolio_path, note }
+
+    Examples:
+        - "Watch NVDA and TSLA for me" / "帮我关注英伟达和特斯拉" -> action='add', symbols=['NVDA', 'TSLA']
+        - "Stop tracking TSLA" -> action='remove', symbols=['TSLA']
+        - "What's on my watchlist?" -> action='list'
+    """
+    try:
+        if params.action in {"add", "remove"} and not params.symbols:
+            return {"error": f"action '{params.action}' requires at least one symbol"}
+        config = _load(params.config)
+
+        def _run() -> dict[str, Any]:
+            portfolio = holdings_store.load_portfolio(config.portfolio_path)
+            if params.action == "add":
+                holdings_store.add_watchlist_symbols(portfolio, params.symbols)
+                holdings_store.save_portfolio(portfolio, config.portfolio_path)
+            elif params.action == "remove":
+                holdings_store.remove_watchlist_symbols(portfolio, params.symbols)
+                holdings_store.save_portfolio(portfolio, config.portfolio_path)
+            return {
+                "action": params.action,
+                "watchlist": portfolio["watchlist"],
+                "holdings_symbols": [h["symbol"] for h in portfolio["holdings"]],
+                "updated_at": portfolio.get("updated_at"),
+                "portfolio_path": str(config.portfolio_path),
+                "note": "Watchlist symbols are automatically included in every research tool's universe.",
+            }
+
+        return await asyncio.to_thread(_run)
+    except Exception as exc:
+        return _err(exc)
+
+
+@mcp.tool(
+    name="quant_manage_holdings",
+    annotations={"title": "Manage holdings & P&L", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+)
+async def quant_manage_holdings(params: HoldingsInput) -> dict[str, Any]:
+    """List (with P&L), set/update, or remove the user's self-reported stock positions.
+
+    Positions are the user's own bookkeeping in ``data/portfolio.json`` — research context only,
+    never broker state or orders. Held symbols are automatically covered by every research tool,
+    and the daily market report opens with this P&L snapshot. ``list`` marks positions with
+    best-effort live quotes (falling back to the cached last close; see ``quotes_source``).
+
+    Args:
+        params (HoldingsInput):
+            - config (str): config path relative to the project root.
+            - action (str): 'list' (default) | 'set' | 'remove'.
+            - positions: for 'set', rows of {symbol, shares, cost_basis?, note?} — an existing
+              symbol is replaced wholesale; for 'remove', only each row's symbol is used.
+
+    Returns:
+        dict: { action, holdings, watchlist, updated_at, portfolio_path, disclaimer,
+        and for list: positions[] (price, day_change_pct, market_value, unrealized_pnl, ...),
+        totals{}, quotes_source }
+
+    Examples:
+        - "I bought 15 AAPL at 182.5" / "我 182.5 买了 15 股苹果" -> action='set',
+          positions=[{symbol: 'AAPL', shares: 15, cost_basis: 182.5}]
+        - "How are my positions doing?" / "我的持仓怎么样了" -> action='list'
+        - "I sold all my AAPL" -> action='remove', positions=[{symbol: 'AAPL'}]
+    """
+    try:
+        if params.action == "set":
+            missing = [p.symbol for p in params.positions if p.shares is None]
+            if not params.positions or missing:
+                return {"error": f"action 'set' requires positions with shares > 0 (missing shares for: {missing or 'all'})"}
+        if params.action == "remove" and not params.positions:
+            return {"error": "action 'remove' requires positions (symbol only)"}
+        config = _load(params.config)
+        await _prewarm(config, params.refresh)
+
+        def _run() -> dict[str, Any]:
+            portfolio = holdings_store.load_portfolio(config.portfolio_path)
+            if params.action == "set":
+                holdings_store.upsert_holdings(portfolio, [p.model_dump() for p in params.positions])
+                holdings_store.save_portfolio(portfolio, config.portfolio_path)
+            elif params.action == "remove":
+                holdings_store.remove_holdings(portfolio, [p.symbol for p in params.positions])
+                holdings_store.save_portfolio(portfolio, config.portfolio_path)
+            result: dict[str, Any] = {
+                "action": params.action,
+                "holdings": portfolio["holdings"],
+                "watchlist": portfolio["watchlist"],
+                "updated_at": portfolio.get("updated_at"),
+                "portfolio_path": str(config.portfolio_path),
+                "disclaimer": DISCLAIMER,
+            }
+            if params.action == "list" and portfolio["holdings"]:
+                quotes = holdings_store.fetch_live_quotes([h["symbol"] for h in portfolio["holdings"]])
+                prices = load_prices(config.data)  # config 已含持仓标的（_load 叠加过）
+                result.update(holdings_store.build_holdings_snapshot(portfolio, prices, quotes))
+            elif params.action == "list":
+                result.update({"positions": [], "totals": {}, "quotes_source": "last_close"})
+            return result
+
+        return await asyncio.to_thread(_run)
+    except Exception as exc:
+        return _err(exc)
 
 
 @mcp.tool(
@@ -241,34 +409,45 @@ async def quant_get_recommendations(params: RecommendationsInput) -> dict[str, A
     annotations={"title": "Daily US market report", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
 )
 async def quant_generate_market_report(params: ConfigInput) -> dict[str, Any]:
-    """Generate the daily US-market research briefing (news + quant) and return a structured summary.
+    """Generate the daily US-market research briefing (news + quant + the user's holdings P&L).
 
     Fetches recent financial-media headlines (free RSS) and per-company news, grades the universe
-    into relatively-favorable research candidates vs elevated-risk names from price statistics, and
-    includes the categorized quant candidates. Writes market_intel.{html,md,json} to the report dir.
+    into relatively-favorable research candidates vs elevated-risk names from price statistics,
+    includes the categorized quant candidates, and — when the user has chat-managed holdings —
+    opens with their P&L snapshot. Writes market_intel.{json,md,html} plus the artifact-ready
+    market_intel_artifact.html to the configured report dir.
 
-    Present the returned ``report_markdown`` to the user AS AN ARTIFACT (a titled Markdown
-    document), not just an inline chat summary. The structured fields are there for any
-    follow-up reasoning.
+    Present the report to the user AS AN ARTIFACT, preferring the polished HTML:
+    (1) with local file access, publish the self-contained HTML at ``artifact_html_path``;
+    (2) without it, fetch the same HTML via quant_read_report(name='market_intel_artifact.html');
+    (3) only as a last resort render ``report_markdown`` as a Markdown artifact.
+    The structured fields are there for any follow-up reasoning.
 
     Args:
         params (ConfigInput): config path relative to project root.
 
     Returns:
-        dict: { display:"artifact", report_markdown (render this as the artifact), as_of_date,
-        data_status, market_overview{}, buy_candidates[], high_risk[], quant_candidates{}, news[],
-        warnings[], disclaimer }
-        (the HTML/MD/JSON files are also written to the configured report dir)
+        dict: { display:"html_artifact", artifact_html_path, report_markdown (fallback),
+        as_of_date, data_status, holdings (P&L snapshot or None), market_overview{},
+        buy_candidates[], high_risk[], quant_candidates{}, news[], warnings[], disclaimer }
     """
     try:
         config = _load(params.config)
         await _prewarm(config, params.refresh)
-        report = await asyncio.to_thread(build_market_report, config)
+
+        def _build() -> tuple[dict[str, Any], dict[str, Path]]:
+            report = build_market_report(config)
+            paths = write_market_report(report, config.market_intel.output_dir)
+            return report, paths
+
+        report, paths = await asyncio.to_thread(_build)
         return {
-            "display": "artifact",  # client hint: render report_markdown as a Markdown artifact
+            "display": "html_artifact",  # client hint: present the HTML artifact (see docstring)
+            "artifact_html_path": str(paths["artifact"].resolve()),
             "report_markdown": render_markdown(report),
             "as_of_date": report.get("as_of_date"),
             "data_status": report.get("data_status"),
+            "holdings": report.get("holdings"),
             "market_overview": report.get("market_overview", {}),
             "buy_candidates": report.get("buy_candidates", []),
             "high_risk": report.get("high_risk", []),
@@ -321,6 +500,8 @@ async def quant_run_backtest(params: ConfigInput) -> dict[str, Any]:
     Executes the full close-to-close research backtest and writes the standard report artifacts
     (summary.md, audit.json, equity curves, metrics, recommendations, etc.) to the configured
     report dir. This is a research simulation — it never submits or proposes live orders.
+    Note: the universe includes the chat-managed watchlist/holdings overlay, so results can
+    shift when the user edits their watchlist.
 
     Args:
         params (ConfigInput): config path relative to project root.
