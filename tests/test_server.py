@@ -7,13 +7,9 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-import pandas as pd
-from _helpers import _config, _write_audit, _write_equity
+from _helpers import _config
 
 from quant_agent.alerts import alert_summary, build_alerts
-from quant_agent.approvals import approve_paper_orders, load_approval, reject_paper_orders
-from quant_agent.broker import PaperBroker
-from quant_agent.comparison import write_strategy_comparison
 from quant_agent.config import parse_config
 from quant_agent.notifications import build_notifications, dispatch_notifications
 from quant_agent.server import (
@@ -24,14 +20,6 @@ from quant_agent.server import (
     _handler_factory,
     build_home_html,
 )
-
-
-def test_paper_broker_preview_does_not_submit() -> None:
-    orders = pd.DataFrame({"symbol": ["AAA"], "side": ["BUY"], "delta_shares": [10]})
-    broker = PaperBroker()
-    preview = broker.preview_orders(orders)
-    assert preview.loc[0, "status"] == "preview"
-    assert broker.audit_log == []
 
 
 def test_alerts_capture_metric_and_data_quality_breaches(tmp_path: Path) -> None:
@@ -61,24 +49,6 @@ def test_notifications_write_outbox(tmp_path: Path) -> None:
     assert len(dispatched) == 1
     assert (tmp_path / "reports" / "notifications.json").exists()
     assert (config.notifications.output_dir / "notification_outbox.json").exists()
-
-
-def test_paper_order_approval_flow(tmp_path: Path) -> None:
-    report_dir = tmp_path / "report"
-    report_dir.mkdir()
-    pd.DataFrame(
-        [{"target_date": "2024-01-02", "symbol": "AAA", "side": "BUY", "delta_shares": 10, "reference_price": 100}]
-    ).to_csv(report_dir / "proposed_orders.csv", index=False)
-    (report_dir / "paper_trading_audit.json").write_text(
-        json.dumps({"checks": [{"passed": True, "code": "ok"}], "approved": True}),
-        encoding="utf-8",
-    )
-    approval = approve_paper_orders(report_dir, approver="tester", comment="ok")
-    assert approval["status"] == "approved"
-    assert (report_dir / "broker_preview.csv").exists()
-    assert load_approval(report_dir)["status"] == "approved"
-    rejected = reject_paper_orders(report_dir, approver="tester", comment="no")
-    assert rejected["status"] == "rejected"
 
 
 def test_runtime_status_store_and_home_html(tmp_path: Path) -> None:
@@ -194,20 +164,3 @@ def test_dashboard_api_requires_token_and_audits_denials(tmp_path: Path) -> None
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
-
-
-def test_write_strategy_comparison(tmp_path: Path) -> None:
-    first = _write_audit(tmp_path / "first", total_return=0.1, sharpe=1.0, test_return=0.05)
-    second = _write_audit(tmp_path / "second", total_return=0.2, sharpe=1.5, test_return=0.08)
-    _write_equity(first)
-    _write_equity(second)
-    comparison = write_strategy_comparison([first, second], tmp_path / "comparison")
-    assert list(comparison["name"]) == ["first", "second"]
-    assert (tmp_path / "comparison" / "strategy_comparison.csv").exists()
-    markdown = (tmp_path / "comparison" / "strategy_comparison.md").read_text(encoding="utf-8")
-    assert "equity_comparison.svg" in markdown
-    assert (tmp_path / "comparison" / "equity_comparison.svg").exists()
-    assert (tmp_path / "comparison" / "drawdown_comparison.svg").exists()
-    html = (tmp_path / "comparison" / "index.html").read_text(encoding="utf-8")
-    assert "Strategy Comparison" in html
-    assert "equity_comparison.svg" in html

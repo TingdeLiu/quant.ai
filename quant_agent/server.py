@@ -15,9 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from quant_agent.approvals import approve_paper_orders, load_approval, reject_paper_orders
 from quant_agent.config import AppConfig, DashboardSecurityConfig, ReportConfig, load_config
-from quant_agent.dashboard import write_dashboard
 from quant_agent.i18n import normalize_language, tr
 from quant_agent.llm import generate_chat_reply
 from quant_agent.market_intel import build_market_report, write_market_report
@@ -425,15 +423,8 @@ def _handler_factory(
                 )
                 self._send_json({"started": started, "status": market_intel.read_status()}, code=code)
                 return
-            if path.startswith("/api/runs/") and path.endswith("/approve-paper"):
-                self._approve_run(path, history)
-                return
-            if path.startswith("/api/runs/") and path.endswith("/reject-paper"):
-                self._reject_run(path, history)
-                return
-            else:
-                self.send_error(HTTPStatus.NOT_FOUND, "Not found")
-                return
+            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+            return
 
         def log_message(self, format: str, *args: object) -> None:
             return
@@ -482,54 +473,11 @@ def _handler_factory(
             if len(parts) == 3:
                 self._send_json(record)
                 return
-            if parts[3] == "approval":
-                report = _report_dir_from_record(record)
-                self._send_json(load_approval(report))
-                return
             if parts[3] == "alerts":
                 report = _report_dir_from_record(record)
                 self._send_json(_load_json(report / "alerts.json"))
                 return
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
-
-        def _approve_run(self, path: str, history_store: RunHistory) -> None:
-            record = _record_from_post_path(path, history_store, "approve-paper")
-            if record is None:
-                self.send_error(HTTPStatus.NOT_FOUND, "Run not found")
-                return
-            approval = approve_paper_orders(
-                report_dir := _report_dir_from_record(record),
-                approver="dashboard",
-                comment="Approved from local dashboard API.",
-                allow_submit=config.approvals.allow_broker_submit_after_approval,
-            )
-            write_dashboard(report_dir, report_dir / "dashboard.html", config.language)
-            audit_log.append(
-                "approve_paper_orders",
-                status="success",
-                request=self,
-                details={"run_id": record.get("run_id"), "report_dir": str(report_dir)},
-            )
-            self._send_json(approval)
-
-        def _reject_run(self, path: str, history_store: RunHistory) -> None:
-            record = _record_from_post_path(path, history_store, "reject-paper")
-            if record is None:
-                self.send_error(HTTPStatus.NOT_FOUND, "Run not found")
-                return
-            approval = reject_paper_orders(
-                report_dir := _report_dir_from_record(record),
-                approver="dashboard",
-                comment="Rejected from local dashboard API.",
-            )
-            write_dashboard(report_dir, report_dir / "dashboard.html", config.language)
-            audit_log.append(
-                "reject_paper_orders",
-                status="success",
-                request=self,
-                details={"run_id": record.get("run_id"), "report_dir": str(report_dir)},
-            )
-            self._send_json(approval)
 
         def _send_run_file(self, path: str, history_store: RunHistory) -> None:
             parts = [unquote(part) for part in path.split("/") if part]
@@ -702,13 +650,6 @@ def _run_record(
         "max_drawdown": metrics.get("max_drawdown"),
         "alert_summary": alerts.get("summary", {}) if isinstance(alerts, dict) else {},
     }
-
-
-def _record_from_post_path(path: str, history: RunHistory, action: str) -> dict[str, Any] | None:
-    parts = [unquote(part) for part in path.split("/") if part]
-    if len(parts) != 4 or parts[0] != "api" or parts[1] != "runs" or parts[3] != action:
-        return None
-    return history.get(parts[2])
 
 
 def _report_dir_from_record(record: dict[str, Any]) -> Path:

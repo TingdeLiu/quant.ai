@@ -10,7 +10,6 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from quant_agent.analyze import _clean_symbols, analyze_symbols, read_symbols_file, write_analysis
-from quant_agent.comparison import write_strategy_comparison
 from quant_agent.config import load_config
 from quant_agent.config_tools import write_recommended_config
 from quant_agent.dashboard import write_dashboard
@@ -262,17 +261,6 @@ def write_recommended_config_command(
     console.print("[bold green]Recommended config written[/bold green]")
     console.print(f"Output: {output}")
     console.print(f"Signal weights: {applied}")
-
-
-@app.command("compare-reports")
-def compare_reports_command(
-    reports: list[Path] = typer.Argument(..., help="Report directories containing audit.json"),
-    output_dir: Path = typer.Option(Path("reports/comparison"), "--output-dir", "-o"),
-) -> None:
-    comparison = write_strategy_comparison(reports, output_dir)
-    console.print("[bold green]Comparison written[/bold green]")
-    console.print(f"Output: {output_dir}")
-    console.print(comparison[["name", "overall_total_return", "overall_sharpe", "test_total_return", "test_sharpe"]])
 
 
 @app.command("data-quality")

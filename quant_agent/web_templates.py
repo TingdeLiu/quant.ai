@@ -128,8 +128,6 @@ const translations = {{
     true: '是',
     false: '否',
     dashboard: 'dashboard',
-    approve: '批准',
-    reject: '拒绝',
     no_runs: '暂无运行记录。'
   }},
   en: {{
@@ -167,8 +165,6 @@ const translations = {{
     true: 'true',
     false: 'false',
     dashboard: 'dashboard',
-    approve: 'Approve',
-    reject: 'Reject',
     no_runs: 'No runs recorded.'
   }}
 }};
@@ -181,7 +177,6 @@ const headerTranslations = {{
     Started: '开始时间',
     Finished: '结束时间',
     Alerts: '告警',
-    Approval: '审批',
     Report: '报告'
   }},
   en: {{}}
@@ -262,8 +257,8 @@ async function refresh() {{
     files.map(f => `<tr><td><a href="/report/${{encodeURIComponent(f.name)}}">${{f.name}}</a></td><td>${{f.size}}</td></tr>`).join('') +
     '</tbody></table>';
   const runs = await apiFetch('/api/runs').then(r => r.json());
-  document.getElementById('runs').innerHTML = '<table><thead><tr><th>Run ID</th><th>Status</th><th>Started</th><th>Finished</th><th>Alerts</th><th>Approval</th><th>Report</th></tr></thead><tbody>' +
-    runs.map(r => `<tr><td>${{r.run_id}}</td><td>${{formatStatusValue(r.status)}}</td><td>${{r.started_at || ''}}</td><td>${{r.finished_at || ''}}</td><td>${{(r.alert_summary || {{}}).highest_severity || ''}}</td><td><button onclick="approveRun('${{r.run_id}}')">${{t('approve')}}</button><button onclick="rejectRun('${{r.run_id}}')">${{t('reject')}}</button></td><td><a href="/runs/${{encodeURIComponent(r.run_id)}}/dashboard">${{t('dashboard')}}</a></td></tr>`).join('') +
+  document.getElementById('runs').innerHTML = '<table><thead><tr><th>Run ID</th><th>Status</th><th>Started</th><th>Finished</th><th>Alerts</th><th>Report</th></tr></thead><tbody>' +
+    runs.map(r => `<tr><td>${{r.run_id}}</td><td>${{formatStatusValue(r.status)}}</td><td>${{r.started_at || ''}}</td><td>${{r.finished_at || ''}}</td><td>${{(r.alert_summary || {{}}).highest_severity || ''}}</td><td><a href="/runs/${{encodeURIComponent(r.run_id)}}/dashboard">${{t('dashboard')}}</a></td></tr>`).join('') +
     '</tbody></table>';
   translateTableHeaders();
 }}
@@ -305,14 +300,6 @@ async function pollMarketReport() {{
     msg.textContent = '';
   }}
 }}
-async function approveRun(runId) {{
-  await apiFetch(`/api/runs/${{encodeURIComponent(runId)}}/approve-paper`, {{ method: 'POST' }});
-  await refresh();
-}}
-async function rejectRun(runId) {{
-  await apiFetch(`/api/runs/${{encodeURIComponent(runId)}}/reject-paper`, {{ method: 'POST' }});
-  await refresh();
-}}
 async function openJson(path) {{
   const data = await apiFetch(path).then(r => r.text());
   const tab = window.open('', '_blank');
@@ -341,12 +328,11 @@ def _runs_table(history: list[dict[str, Any]]) -> str:
         f"<td>{_escape(row.get('started_at', ''))}</td>"
         f"<td>{_escape(row.get('finished_at', ''))}</td>"
         f"<td>{_escape((row.get('alert_summary') or {}).get('highest_severity', ''))}</td>"
-        f"<td>pending</td>"
         f"<td><a href=\"/runs/{_escape(row.get('run_id', ''))}/dashboard\">dashboard</a></td>"
         "</tr>"
         for row in history
     )
-    return "<table><thead><tr><th>Run ID</th><th>Status</th><th>Started</th><th>Finished</th><th>Alerts</th><th>Approval</th><th>Report</th></tr></thead><tbody>" + rows + "</tbody></table>"
+    return "<table><thead><tr><th>Run ID</th><th>Status</th><th>Started</th><th>Finished</th><th>Alerts</th><th>Report</th></tr></thead><tbody>" + rows + "</tbody></table>"
 
 
 def _escape(value: object) -> str:
