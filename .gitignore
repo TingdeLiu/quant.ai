@@ -22,3 +22,8 @@ data/portfolio.json
 # 本地 Claude Code 设置与运行期产物（个人化，不入库）
 .claude/settings.local.json
 .claude/*.lock
+
+# 项目研发文档
+quant_ai_promotion_guide.md
+CHANGELOG.md
+roadmap.md
