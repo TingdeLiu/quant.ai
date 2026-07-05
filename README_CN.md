@@ -26,9 +26,9 @@ quant-ai analyze AAPL     # 秒级评级一只股票
 
 ## 你会得到什么
 
-<img src="assets/analyze-example.png" alt="quant-ai analyze AAPL 的真实输出" width="820">
+<img src="assets/analyze-example-zh.png" alt="quant-ai analyze AAPL --lang zh 的真实输出" width="820">
 
-`quant-ai analyze AAPL` 的真实输出——**默认英文**，`--lang zh` 切中文。评级从**强烈看多**经**中性**到**强烈看空**。加 `--output-dir` 导出 Markdown + JSON，或 `--chart` 输出 PNG 图表。
+`quant-ai analyze AAPL --lang zh` 的真实输出——**默认英文**，`--lang zh` 切中文。评级从**强烈看多**经**中性**到**强烈看空**。加 `--output-dir` 导出 Markdown + JSON，或 `--chart` 输出 PNG 图表。
 
 ## 在 Claude 或 Codex 里使用
 
@@ -69,7 +69,7 @@ Claude（或 Codex）会调取项目的真实数据，把量化分析摆在你�
 
 `quant-ai market-report` 生成每日美股研究简报——你的持仓盈亏（设置后）、市场概览、关注/高风险名单、按持有周期的量化候选、免费新闻头条——Anthropic 风格设计，产出 HTML + 自包含 artifact + Markdown + JSON：
 
-<img src="assets/market-report-example.png" alt="每日市场报告——你的持仓盈亏开篇" width="820">
+<img src="assets/market-report-example-zh.png" alt="每日市场报告（中文）——你的持仓盈亏开篇" width="820">
 
 `quant-ai serve-dashboard`（或 `write-dashboard`）渲染回测诊断——核心指标、告警、分段指标、风控检查、持仓与交易——内置 **EN / 中文** 切换：
 
