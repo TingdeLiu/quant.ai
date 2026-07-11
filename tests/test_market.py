@@ -56,7 +56,7 @@ def test_market_report_builds_offline(tmp_path: Path) -> None:
         "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
     }
     config = parse_config(raw, base=tmp_path)
-    report = build_market_report(config)  # English by default
+    report = build_market_report(config, target_fetcher=lambda symbols: {})  # English by default
 
     assert report["data_status"] == "ok"
     assert report["as_of_date"]
@@ -79,7 +79,7 @@ def test_market_report_chinese(tmp_path: Path) -> None:
         "language": "zh",
     }
     config = parse_config(raw, base=tmp_path)
-    report = build_market_report(config)
+    report = build_market_report(config, target_fetcher=lambda symbols: {})
     assert report["language"] == "zh"
     assert "不构成投资建议" in report["disclaimer"]
     assert "今日美股研究简报" in render_markdown(report)
@@ -96,7 +96,7 @@ def test_market_report_includes_holdings(tmp_path: Path) -> None:
         fetched.append(symbols)
         return {}
 
-    report = build_market_report(config, quote_fetcher=fake_quotes)
+    report = build_market_report(config, quote_fetcher=fake_quotes, target_fetcher=lambda symbols: {})
 
     assert fetched == [["AAA", "CCC"]]  # 只对持仓标的取实时价
     holdings = report["holdings"]
@@ -118,7 +118,7 @@ def test_market_report_holdings_chinese(tmp_path: Path) -> None:
     raw = {**_offline_raw(tmp_path), "language": "zh"}
     _write_portfolio(tmp_path)
     config = parse_config(raw, base=tmp_path)
-    report = build_market_report(config, quote_fetcher=lambda symbols: {})
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
     markdown = render_markdown(report)
     assert "我的持仓" in markdown
     assert "合计" in markdown
@@ -126,7 +126,7 @@ def test_market_report_holdings_chinese(tmp_path: Path) -> None:
 
 def test_market_report_without_portfolio_has_no_holdings(tmp_path: Path) -> None:
     config = parse_config(_offline_raw(tmp_path), base=tmp_path)
-    report = build_market_report(config, quote_fetcher=lambda symbols: {})
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
     assert "holdings" not in report
     assert "My holdings" not in render_markdown(report)
     # 无持仓时 artifact 第一个 section 是市场概览，编号从 01 开始。
@@ -139,7 +139,7 @@ def test_holdings_section_first_in_html(tmp_path: Path) -> None:
     raw = _offline_raw(tmp_path)
     _write_portfolio(tmp_path)
     config = parse_config(raw, base=tmp_path)
-    report = build_market_report(config, quote_fetcher=lambda symbols: {})
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
 
     html = render_html(report)
     artifact = render_artifact_html(report)
@@ -154,7 +154,7 @@ def test_render_artifact_html_self_contained(tmp_path: Path) -> None:
     raw = _offline_raw(tmp_path)
     _write_portfolio(tmp_path)
     config = parse_config(raw, base=tmp_path)
-    report = build_market_report(config, quote_fetcher=lambda symbols: {})
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
     artifact = render_artifact_html(report)
 
     # 片段形态：无文档包装、零外部资源（artifact 的严格 CSP 下必须可渲染）。
@@ -177,13 +177,100 @@ def test_write_market_report_writes_artifact(tmp_path: Path) -> None:
     raw = _offline_raw(tmp_path)
     _write_portfolio(tmp_path)
     config = parse_config(raw, base=tmp_path)
-    report = build_market_report(config, quote_fetcher=lambda symbols: {})
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
     paths = write_market_report(report, tmp_path / "reports")
 
     assert set(paths) == {"json", "markdown", "html", "artifact"}
     for path in paths.values():
         assert path.exists() and path.stat().st_size > 0
     assert paths["artifact"].name == "market_intel_artifact.html"
+
+
+def test_pick_cards_pin_holding_and_show_valuation_range(tmp_path: Path) -> None:
+    raw = {**_offline_raw(tmp_path), "language": "zh"}
+    (tmp_path / "pf.json").write_text(  # 只持仓 AAA，避免和 _write_portfolio 的 CCC 混在一起
+        json.dumps({"holdings": [{"symbol": "AAA", "shares": 10, "cost_basis": 100.0}]}), encoding="utf-8"
+    )
+    config = parse_config(raw, base=tmp_path)
+    fake_targets = {"AAA": {"low": 80.0, "target": 130.0, "high": 180.0}}
+    report = build_market_report(
+        config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: fake_targets
+    )
+
+    for data in report["quant_candidates"].values():
+        symbols = data["symbols"]
+        assert symbols[0]["symbol"] == "AAA"  # 持仓标的置顶（榜首 = 01）
+        assert symbols[0]["holding"]["shares"] == 10.0
+        by_symbol = {s["symbol"]: s for s in symbols}
+        assert by_symbol["AAA"]["valuation"] == fake_targets["AAA"]
+        assert by_symbol["AAA"]["name_zh"] is None  # 假代码不在中文名映射表里
+        assert by_symbol["SPY"]["name_zh"] == "标普500ETF"
+        assert by_symbol["SPY"]["valuation"] is None  # 无估值数据 -> 卡片降级为旧强度条
+        assert by_symbol["SPY"]["day_change_pct"] is not None
+
+    artifact = render_artifact_html(report)
+    assert 'class="pick is-holding"' in artifact
+    assert "range-target" in artifact  # AAA 卡片：估值区间条
+    assert '<span class="name-zh">标普500ETF</span>' in artifact
+    assert "12-1动量" not in artifact and "20/50趋势" not in artifact  # z-score 依据已被替换
+    assert "当日" in artifact  # 改为显示当日涨跌值/幅度
+
+
+def test_fund_tracker_section(tmp_path: Path) -> None:
+    raw = _offline_raw(tmp_path)  # universe: AAA/BBB/CCC/SPY
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, target_fetcher=lambda symbols: {})
+
+    symbols = {f["symbol"] for f in report["fund_trackers"]}
+    assert symbols == {"SPY"}  # 只有 SPY 有合成价格数据，QQQ/SMH/AIQ 无数据时静默跳过
+    assert report["fund_trackers"][0]["day_change_pct"] is not None
+
+    markdown = render_markdown(report)
+    assert "Fund & index tracker" in markdown
+    html = render_html(report)
+    assert "Fund &amp; index tracker" in html
+    assert 'class="tile fund"' in html
+
+
+def test_high_risk_section_flags_near_high(tmp_path: Path) -> None:
+    raw = _offline_raw(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, target_fetcher=lambda symbols: {})
+
+    assert "High risk" in render_markdown(report)
+    html = render_html(report)
+    assert "High risk" in html
+    for item in report["high_risk"]:
+        assert "dist_from_high_pct" in item and "ret_21d_pct" in item
+        assert "name_zh" in item
+
+
+def test_potential_picks_renamed_and_show_chinese_names(tmp_path: Path) -> None:
+    raw = {**_offline_raw(tmp_path), "language": "zh"}
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, target_fetcher=lambda symbols: {})
+
+    markdown = render_markdown(report)
+    assert "潜力股" in markdown
+    assert "相对值得关注" not in markdown
+    by_symbol = {c["symbol"]: c for c in report["buy_candidates"]}
+    if "SPY" in by_symbol:
+        assert by_symbol["SPY"]["name_zh"] == "标普500ETF"
+        assert "标普500ETF" in render_html(report)
+
+
+def test_holdings_table_has_sparkline(tmp_path: Path) -> None:
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+
+    position = report["holdings"]["positions"][0]
+    assert len(position["spark"]) > 1
+
+    artifact = render_artifact_html(report)
+    assert 'class="spark-cell"' in artifact
+    assert "<svg" in artifact and "polyline" in artifact
 
 
 def test_markets_data_builds_offline(tmp_path: Path) -> None:

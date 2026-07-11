@@ -12,11 +12,13 @@ research candidates derived from public news and historical price statistics.
 
 from __future__ import annotations
 
+import dataclasses
 import html
 import json
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,22 +27,27 @@ from xml.etree import ElementTree
 import pandas as pd
 
 from quant_agent import holdings as holdings_store
+from quant_agent.company_names import name_zh
 from quant_agent.config import AppConfig
 from quant_agent.data import load_prices
 from quant_agent.features import build_signals
 from quant_agent.i18n import normalize_language, tr
 from quant_agent.llm import generate_market_narrative
-from quant_agent.recommendations import RECOMMENDATION_PROFILES
+from quant_agent.recommendations import (
+    RECOMMENDATION_PROFILES,
+    classify_recommendation_risk,
+    recommendation_confidence,
+)
 
 
 def _disclaimer(lang: str) -> str:
     return tr(
         "This report is for quantitative research and learning only — not investment advice, "
-        "and not authorization to trade. The 'worth watching' and 'high risk' lists are research "
+        "and not authorization to trade. The 'potential picks' and 'high risk' lists are research "
         "candidates from public news and historical-price statistics; any real trade needs "
         "independent data validation, compliance review and risk control.",
         "本报告仅用于量化研究与学习，不构成投资建议，也不是实盘交易授权。"
-        "所谓“适合关注”和“高风险”均为基于公开新闻与历史价格统计的研究候选，"
+        "所谓“潜力股”和“高风险”均为基于公开新闻与历史价格统计的研究候选，"
         "任何真实交易都需要独立的数据校验、合规审查和风险控制。",
         lang,
     )
@@ -53,39 +60,81 @@ _USER_AGENT = (
 
 # Display metadata for the holding-horizon recommendation cards (en/zh).
 PROFILE_DISPLAY: dict[str, dict[str, Any]] = {
-    "long_term": {"en": "Long-term", "zh": "长线", "horizon_en": "6-12 months", "horizon_zh": "6-12 个月", "tag_en": "trend / low-vol", "tag_zh": "趋势 / 低波动", "order": 1},
-    "swing": {"en": "Swing", "zh": "中线 · 波段", "horizon_en": "1-3 months", "horizon_zh": "1-3 个月", "tag_en": "trend / reversal", "tag_zh": "趋势 / 反转", "order": 2},
+    "long_term": {"en": "Long-term", "zh": "长线", "horizon_en": "6-24 months", "horizon_zh": "6-24 个月", "tag_en": "momentum / low-vol", "tag_zh": "动量 / 低波动", "order": 1},
+    "medium_term": {"en": "Medium-term", "zh": "中线", "horizon_en": "1-6 months", "horizon_zh": "1-6 个月", "tag_en": "trend / reversal", "tag_zh": "趋势 / 反转", "order": 2},
     "short_term": {"en": "Short-term", "zh": "短线", "horizon_en": "1-4 weeks", "horizon_zh": "1-4 周", "tag_en": "reversal / short trend", "tag_zh": "反转 / 短趋势", "order": 3},
-    "defensive": {"en": "Defensive", "zh": "防守", "horizon_en": "3-12 months", "horizon_zh": "3-12 个月", "tag_en": "low-vol first", "tag_zh": "低波动优先", "order": 4},
-    "aggressive": {"en": "Aggressive", "zh": "激进", "horizon_en": "1-6 months", "horizon_zh": "1-6 个月", "tag_en": "high momentum / beta", "tag_zh": "高动量 / 高弹性", "order": 5},
 }
 
-_Z_LABELS: dict[str, tuple[str, str]] = {
-    "momentum_12_1_z": ("12-1 momentum", "12-1动量"),
-    "trend_20_50_z": ("20/50 trend", "20/50趋势"),
-    "reversal_1m_z": ("1M reversal", "1月反转"),
-    "low_volatility_z": ("low vol", "低波动"),
-    "ml_rank_z": ("ML rank", "ML排名"),
-}
+# Index/sector ETFs tracked in the "fund & index" section regardless of the user's universe.
+FUND_TRACKERS: list[dict[str, str]] = [
+    {"symbol": "QQQ", "label_en": "Nasdaq 100", "label_zh": "纳斯达克100"},
+    {"symbol": "SPY", "label_en": "S&P 500", "label_zh": "标普500"},
+    {"symbol": "DIA", "label_en": "Dow Jones", "label_zh": "道琼斯"},
+    {"symbol": "SMH", "label_en": "Semiconductors", "label_zh": "半导体"},
+    {"symbol": "AIQ", "label_en": "AI & Tech", "label_zh": "人工智能"},
+]
+
+_MAX_TARGET_WORKERS = 8
 
 
-def _z_label(column: str, lang: str) -> str:
-    pair = _Z_LABELS.get(column)
-    return tr(*pair, lang) if pair else column
+def fetch_analyst_price_targets(symbols: list[str]) -> dict[str, dict[str, float]]:
+    """Best-effort analyst price-target range (low/target/high) via yfinance — degrades to partial/{}.
+
+    仅对当日入选的推荐标的取数（研究推荐卡片的“机构估值区间”条），单只失败直接跳过，
+    不影响其余标的；线程池上限沿用 holdings.fetch_live_quotes 的写法。
+    """
+    if not symbols:
+        return {}
+    try:
+        import yfinance as yf
+    except Exception:
+        return {}
+
+    def _one(symbol: str) -> tuple[str, dict[str, float]] | None:
+        try:
+            targets = yf.Ticker(symbol).get_analyst_price_targets()
+            low = targets.get("low")
+            high = targets.get("high")
+            mid = targets.get("median", targets.get("mean"))
+            if low is None or high is None or mid is None or float(high) <= float(low):
+                return None
+            return symbol, {"low": float(low), "target": float(mid), "high": float(high)}
+        except Exception:
+            return None
+
+    workers = max(1, min(_MAX_TARGET_WORKERS, len(symbols)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(executor.map(_one, symbols))
+    return dict(item for item in results if item is not None)
+
+
+def _level_zh(level: str) -> str:
+    return {"low": "低", "medium": "中", "high": "高"}.get(level, level)
 
 
 def build_market_report(
     config: AppConfig,
     quote_fetcher: Callable[[list[str]], dict[str, float]] | None = None,
+    target_fetcher: Callable[[list[str]], dict[str, dict[str, float]]] | None = None,
 ) -> dict[str, Any]:
     """Build the full daily market intelligence report payload.
 
     ``quote_fetcher`` is injectable for offline tests (None -> live yfinance quotes);
     it is only invoked when the chat-managed portfolio actually has holdings.
+    ``target_fetcher`` is likewise injectable (None -> live yfinance analyst targets);
+    it is only invoked when the quant picks section is non-empty.
     """
     mi = config.market_intel
     lang = normalize_language(config.language)
     generated_at = datetime.now(UTC).isoformat()
+
+    # Fixed index/sector ETFs are always tracked, regardless of the user's own universe.
+    fund_symbols = [spec["symbol"] for spec in FUND_TRACKERS]
+    extra_funds = [s for s in fund_symbols if s not in config.data.universe]
+    if extra_funds:
+        merged_data = dataclasses.replace(config.data, universe=[*config.data.universe, *extra_funds])
+        config = dataclasses.replace(config, data=merged_data)
+
     report: dict[str, Any] = {
         "generated_at": generated_at,
         "language": lang,
@@ -93,6 +142,7 @@ def build_market_report(
         "data_status": "unavailable",
         "universe_size": len(config.data.universe),
         "market_overview": {},
+        "fund_trackers": [],
         "buy_candidates": [],
         "high_risk": [],
         "quant_candidates": {},
@@ -123,6 +173,7 @@ def build_market_report(
         report["high_risk"] = analysis["high_risk"]
         analysis_symbols = analysis["focus_symbols"]
         report["quant_candidates"] = _quant_candidates(prices, config, lang)
+        report["fund_trackers"] = _fund_tracker_snapshot(prices, lang)
 
     # Chat-managed portfolio: holdings snapshot (P&L) + held symbols lead the news focus.
     portfolio: dict[str, Any] = {}
@@ -136,9 +187,13 @@ def build_market_report(
         fetcher = quote_fetcher if quote_fetcher is not None else holdings_store.fetch_live_quotes
         quotes = fetcher(holding_symbols)  # {} on network failure -> last close
         report["holdings"] = holdings_store.build_holdings_snapshot(portfolio, prices, quotes)
+        _attach_holding_sparklines(report["holdings"], prices)
         focus = list(holding_symbols)
         focus += [symbol for symbol in analysis_symbols if symbol not in focus]
         analysis_symbols = focus[:12]
+
+    if report["quant_candidates"]:
+        _attach_valuation_and_holdings(report, target_fetcher)
 
     # Market-wide financial media headlines.
     report["news"], news_errors = _collect_feeds(mi.news_feeds, mi.max_news_items, mi.request_timeout)
@@ -167,6 +222,54 @@ def build_market_report(
         report["llm_metadata"] = meta
 
     return report
+
+
+def _attach_holding_sparklines(holdings: dict[str, Any], prices: pd.DataFrame | None, window: int = 30) -> None:
+    """Attach the Chinese display name and a recent-close series (for the sparkline) to each position."""
+    for position in holdings.get("positions", []):
+        position["name_zh"] = name_zh(position["symbol"])
+        if prices is None or prices.empty:
+            continue
+        group = prices[prices["symbol"] == position["symbol"]]
+        series = group.sort_values("date")["adj_close"].astype(float).tail(window).tolist()
+        position["spark"] = [round(v, 4) for v in series]
+
+
+def _attach_valuation_and_holdings(
+    report: dict[str, Any],
+    target_fetcher: Callable[[list[str]], dict[str, dict[str, float]]] | None,
+) -> None:
+    """Attach the analyst valuation range to each pick and pin held symbols to the front.
+
+    就地修改 ``report["quant_candidates"]``：每只标的挂上 ``valuation``（估值区间，取不到则
+    为 None，卡片降级为旧的强度条）和 ``holding``（命中本人持仓时的股数/成本/盈亏）；
+    每个持有周期栏目内，命中持仓的标的稳定排到最前（榜首 = 01）。
+    """
+    quant = report["quant_candidates"]
+    all_symbols: list[str] = []
+    for data in quant.values():
+        for s in data.get("symbols", []):
+            if s["symbol"] not in all_symbols:
+                all_symbols.append(s["symbol"])
+    fetcher = target_fetcher if target_fetcher is not None else fetch_analyst_price_targets
+    valuations = fetcher(all_symbols) if all_symbols else {}
+    holding_positions = {p["symbol"]: p for p in report.get("holdings", {}).get("positions", [])}
+
+    for data in quant.values():
+        symbols = data.get("symbols", [])
+        for s in symbols:
+            s["valuation"] = valuations.get(s["symbol"])
+            position = holding_positions.get(s["symbol"])
+            s["holding"] = (
+                {
+                    "shares": position["shares"],
+                    "cost_basis": position.get("cost_basis"),
+                    "unrealized_pnl_pct": position.get("unrealized_pnl_pct"),
+                }
+                if position
+                else None
+            )
+        symbols.sort(key=lambda s: 0 if s["holding"] else 1)
 
 
 def write_market_report(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
@@ -287,6 +390,7 @@ def _rank_buy_candidates(frame: pd.DataFrame, lang: str = "en", limit: int = 8) 
         out.append(
             {
                 "symbol": row["symbol"],
+                "name_zh": name_zh(str(row["symbol"])),
                 "last_price": row["last_price"],
                 "ret_21d_pct": round(float(row["ret_21d"]) * 100, 2),
                 "ret_5d_pct": round(float(row["ret_5d"]) * 100, 2),
@@ -298,30 +402,42 @@ def _rank_buy_candidates(frame: pd.DataFrame, lang: str = "en", limit: int = 8) 
 
 
 def _rank_high_risk(frame: pd.DataFrame, lang: str = "en", limit: int = 8) -> list[dict[str, Any]]:
+    """High-risk list: names already selling off, plus names stretched near their 52-week
+    high that look prone to a pullback under the current run (elevated vol or an extended
+    1-month gain while sitting near the high)."""
     if frame.empty:
         return []
     df = frame.dropna(subset=["vol_annual"]).copy()
     if df.empty:
         return []
     vol_threshold = float(df["vol_annual"].quantile(0.75))
+    near_high = df["dist_from_high"] >= -0.05
+    overextended = df["ret_21d"].fillna(0) >= 0.12
+    elevated_vol = df["vol_annual"] >= vol_threshold
     flagged = df[
-        (df["vol_annual"] >= vol_threshold)
+        (near_high & (overextended | elevated_vol))
         | (df["max_drawdown_252"] <= -0.20)
         | (df["ret_5d"] <= -0.08)
         | (df["dist_from_high"] <= -0.25)
     ].copy()
     if flagged.empty:
         return []
-    # Highest volatility + deepest drawdown surface first.
-    flagged["risk_score"] = flagged["vol_annual"].fillna(0) - flagged["max_drawdown_252"].fillna(0)
+    # Near-high overextension surfaces first (forward-looking pullback risk), then vol/drawdown.
+    flagged["risk_score"] = (
+        flagged["vol_annual"].fillna(0)
+        - flagged["max_drawdown_252"].fillna(0)
+        + flagged["ret_21d"].clip(lower=0).fillna(0) * (flagged["dist_from_high"] >= -0.05)
+    )
     flagged = flagged.sort_values("risk_score", ascending=False).head(limit)
     out = []
     for _, row in flagged.iterrows():
         out.append(
             {
                 "symbol": row["symbol"],
+                "name_zh": name_zh(str(row["symbol"])),
                 "last_price": row["last_price"],
                 "ret_5d_pct": round(float(row["ret_5d"]) * 100, 2) if pd.notna(row["ret_5d"]) else None,
+                "ret_21d_pct": round(float(row["ret_21d"]) * 100, 2) if pd.notna(row["ret_21d"]) else None,
                 "vol_annual_pct": round(float(row["vol_annual"]) * 100, 1),
                 "max_drawdown_252_pct": round(float(row["max_drawdown_252"]) * 100, 1),
                 "dist_from_high_pct": round(float(row["dist_from_high"]) * 100, 1),
@@ -349,11 +465,22 @@ def _favorable_reason(row: pd.Series, lang: str = "en") -> str:
 
 def _risk_reason(row: pd.Series, lang: str = "en") -> str:
     sep = tr("; ", "；", lang)
-    parts = [tr(
+    parts: list[str] = []
+    near_high = row["dist_from_high"] >= -0.05
+    overextended = pd.notna(row["ret_21d"]) and row["ret_21d"] >= 0.12
+    if near_high:
+        parts.append(tr("near the 52-week high — pullback risk", "处于52周高点附近，警惕回撤", lang))
+    if overextended:
+        parts.append(tr(
+            f"1M {_signed(row['ret_21d'])} — extended run",
+            f"近1月{_signed(row['ret_21d'])}，涨幅偏多",
+            lang,
+        ))
+    parts.append(tr(
         f"annualized vol ~{float(row['vol_annual']) * 100:.0f}% (elevated)",
         f"年化波动约{float(row['vol_annual']) * 100:.0f}%（偏高）",
         lang,
-    )]
+    ))
     if row["max_drawdown_252"] <= -0.20:
         parts.append(tr(
             f"1Y max drawdown {float(row['max_drawdown_252']) * 100:.0f}%",
@@ -408,13 +535,21 @@ def _quant_candidates(prices: pd.DataFrame, config: AppConfig, lang: str = "en")
         for _, r in scored.iterrows():
             score = float(r["profile_score"])
             strength = 100 if top_score <= 0 else max(12, min(100, round(score / top_score * 100)))
+            symbol = str(r["symbol"])
+            last_price = round(float(r["adj_close"]), 2) if pd.notna(r.get("adj_close")) else None
+            day_value, day_pct = _day_change(last_price, r.get("ret_1d"))
             symbols.append(
                 {
-                    "symbol": str(r["symbol"]),
+                    "symbol": symbol,
+                    "name_zh": name_zh(symbol),
                     "score": round(score, 3),
                     "strength": strength,
-                    "last_price": round(float(r["adj_close"]), 2) if pd.notna(r.get("adj_close")) else None,
-                    "reason": _quant_reason(r, spec["weights"], lang),
+                    "last_price": last_price,
+                    "day_change_value": day_value,
+                    "day_change_pct": day_pct,
+                    "confidence": recommendation_confidence(score),
+                    "risk_level": classify_recommendation_risk(r),
+                    "reason": _day_change_reason(day_value, day_pct, lang),
                 }
             )
         out[profile] = {
@@ -428,19 +563,21 @@ def _quant_candidates(prices: pd.DataFrame, config: AppConfig, lang: str = "en")
     return dict(sorted(out.items(), key=lambda kv: kv[1].get("order", 99)))
 
 
-def _quant_reason(row: pd.Series, weights: dict[str, float], lang: str = "en") -> str:
-    contributions = []
-    for column, weight in weights.items():
-        value = row.get(column)
-        if value is None or pd.isna(value):
-            continue
-        contributions.append((abs(float(value) * weight), _z_label(column, lang), float(value)))
-    contributions.sort(reverse=True)
-    top = contributions[:2]
-    if not top:
-        return tr("composite cross-sectional ranking", "综合横截面信号排名", lang)
-    sep = tr(", ", "、", lang)
-    return sep.join(f"{label} z={value:+.1f}" for _, label, value in top)
+def _day_change(last_price: float | None, ret_1d: Any) -> tuple[float | None, float | None]:
+    """(day_change_value, day_change_pct) from the latest close and its 1-day return."""
+    if last_price is None or ret_1d is None or pd.isna(ret_1d) or (1 + float(ret_1d)) == 0:
+        return None, None
+    ret_1d = float(ret_1d)
+    prev_price = last_price / (1 + ret_1d)
+    return round(last_price - prev_price, 2), round(ret_1d * 100, 2)
+
+
+def _day_change_reason(value: float | None, pct: float | None, lang: str = "en") -> str:
+    if value is None or pct is None:
+        return tr("no intraday change data", "暂无当日涨跌数据", lang)
+    sign = "+" if value >= 0 else "-"
+    amount = f"{sign}${abs(value):.2f}"
+    return tr(f"today {amount} ({pct:+.2f}%)", f"当日 {amount}（{pct:+.2f}%）", lang)
 
 
 def _pct(series: pd.Series, periods: int) -> float | None:
@@ -450,6 +587,34 @@ def _pct(series: pd.Series, periods: int) -> float | None:
     if prev == 0:
         return None
     return round(float(series.iloc[-1]) / prev - 1.0, 4)
+
+
+def _fund_tracker_snapshot(prices: pd.DataFrame, lang: str = "en") -> list[dict[str, Any]]:
+    """Latest price + 1D/5D/1M return for the fixed index/sector ETF watch list."""
+    out: list[dict[str, Any]] = []
+    for spec in FUND_TRACKERS:
+        symbol = spec["symbol"]
+        group = prices[prices["symbol"] == symbol]
+        if group.empty:
+            continue
+        adj = group.sort_values("date")["adj_close"].astype(float)
+        if adj.empty:
+            continue
+        last_price = round(float(adj.iloc[-1]), 2)
+        ret_1d = _pct(adj, 1)
+        day_value, day_pct = _day_change(last_price, ret_1d)
+        out.append(
+            {
+                "symbol": symbol,
+                "label": tr(spec["label_en"], spec["label_zh"], lang),
+                "last_price": last_price,
+                "day_change_value": day_value,
+                "day_change_pct": day_pct,
+                "ret_5d_pct": round(r * 100, 2) if (r := _pct(adj, 5)) is not None else None,
+                "ret_21d_pct": round(r * 100, 2) if (r := _pct(adj, 21)) is not None else None,
+            }
+        )
+    return out
 
 
 def _max_drawdown(series: pd.Series) -> float:
@@ -643,15 +808,15 @@ def _build_llm_prompt(report: dict[str, Any]) -> str:
     lang = normalize_language(report.get("language", "en"))
     lines = [tr(
         "Using the data below, write a daily US-equity research brief in English, clearly "
-        "separating relatively-strong research candidates from high-risk names, with reasoning.",
-        "请基于以下数据，写一份今日美股研究简报（中文），明确区分相对值得关注的研究候选和高风险标的，并给出依据。",
+        "separating potential-pick research candidates from high-risk names, with reasoning.",
+        "请基于以下数据，写一份今日美股研究简报（中文），明确区分潜力股研究候选和高风险标的，并给出依据。",
         lang,
     ), ""]
     overview = report.get("market_overview") or {}
     if overview:
         lines.append(f"{tr('Market overview', '市场概览', lang)}: {json.dumps(overview, ensure_ascii=False)}")
     if report.get("buy_candidates"):
-        lines.append(f"{tr('Relatively strong candidates (quant screen)', '相对偏强候选（量化筛选）', lang)}: {json.dumps(report['buy_candidates'], ensure_ascii=False)}")
+        lines.append(f"{tr('Potential picks (quant screen)', '潜力股（量化筛选）', lang)}: {json.dumps(report['buy_candidates'], ensure_ascii=False)}")
     if report.get("high_risk"):
         lines.append(f"{tr('High-risk names (quant screen)', '高风险标的（量化筛选）', lang)}: {json.dumps(report['high_risk'], ensure_ascii=False)}")
     if report.get("quant_candidates"):
@@ -682,6 +847,10 @@ def _fmt_pct_signed(value: Any) -> str:
 
 def _fmt_qty(value: Any) -> str:
     return "—" if value is None else f"{float(value):g}"
+
+
+def _md_symbol_label(symbol: str, name: str | None) -> str:
+    return f"{symbol} {name}" if name else symbol
 
 
 def _quotes_source_label(source: str | None, lang: str) -> str:
@@ -759,32 +928,45 @@ def render_markdown(report: dict[str, Any]) -> str:
         ))
         lines.append("")
 
+    if report.get("fund_trackers"):
+        lines.append(f"## {tr('Fund & index tracker', '基金/指数追踪', lang)}")
+        lines.append("| " + " | ".join(tr(
+            "Symbol|Name|Last|Day|5D|1M", "代码|名称|最新价|当日|近5日|近1月", lang).split("|")) + " |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
+        for f in report["fund_trackers"]:
+            day = f"{f['day_change_value']:+.2f} ({f['day_change_pct']:+.2f}%)" if f.get("day_change_pct") is not None else "—"
+            lines.append(
+                f"| {f['symbol']} | {f['label']} | {f['last_price']} | {day} | "
+                f"{f.get('ret_5d_pct')}% | {f.get('ret_21d_pct')}% |"
+            )
+        lines.append("")
+
     if report.get("llm_narrative"):
         lines.append(f"## {tr('AI synthesis', 'AI 综合分析', lang)}")
         lines.append(report["llm_narrative"])
         lines.append("")
 
     if report.get("buy_candidates"):
-        lines.append(f"## {tr('Worth watching (research candidates)', '相对值得关注（研究候选）', lang)}")
+        lines.append(f"## {tr('Potential picks (research candidates)', '潜力股（研究候选）', lang)}")
         lines.append("| " + " | ".join(tr(
             "Symbol|Last|1M|5D|Ann. vol|Reason", "代码|最新价|近1月|近5日|年化波动|依据", lang).split("|")) + " |")
         lines.append("| --- | --- | --- | --- | --- | --- |")
         for c in report["buy_candidates"]:
             lines.append(
-                f"| {c['symbol']} | {c['last_price']} | {c['ret_21d_pct']}% | {c['ret_5d_pct']}% | "
+                f"| {_md_symbol_label(c['symbol'], c.get('name_zh'))} | {c['last_price']} | {c['ret_21d_pct']}% | {c['ret_5d_pct']}% | "
                 f"{c['vol_annual_pct']}% | {c['reason']} |"
             )
         lines.append("")
 
     if report.get("high_risk"):
-        lines.append(f"## {tr('High-risk names (caution)', '高风险标的（谨慎）', lang)}")
+        lines.append(f"## {tr('High risk (caution)', '高风险（谨慎）', lang)}")
         lines.append("| " + " | ".join(tr(
-            "Symbol|Last|5D|Ann. vol|1Y max DD|Reason", "代码|最新价|近5日|年化波动|近一年最大回撤|依据", lang).split("|")) + " |")
+            "Symbol|Last|Dist. from high|1M|5D|Reason", "代码|最新价|距52周高点|近1月|近5日|依据", lang).split("|")) + " |")
         lines.append("| --- | --- | --- | --- | --- | --- |")
         for c in report["high_risk"]:
             lines.append(
-                f"| {c['symbol']} | {c['last_price']} | {c.get('ret_5d_pct')}% | {c['vol_annual_pct']}% | "
-                f"{c.get('max_drawdown_252_pct')}% | {c['reason']} |"
+                f"| {_md_symbol_label(c['symbol'], c.get('name_zh'))} | {c['last_price']} | {c.get('dist_from_high_pct')}% | "
+                f"{c.get('ret_21d_pct')}% | {c.get('ret_5d_pct')}% | {c['reason']} |"
             )
         lines.append("")
 
@@ -795,7 +977,23 @@ def render_markdown(report: dict[str, Any]) -> str:
             lines.append(f"### {data.get('label', profile)}（{data.get('horizon', '')}）")
             for s in data.get("symbols", []):
                 price = f"${s['last_price']}" if s.get("last_price") is not None else "—"
-                lines.append(f"- {s['symbol']}（{price}, score {s['score']}）: {s.get('reason', '')}")
+                label = _md_symbol_label(s["symbol"], s.get("name_zh"))
+                prefix = tr("[HELD] ", "【持仓】", lang) if s.get("holding") else ""
+                valuation = s.get("valuation")
+                val_text = (
+                    tr(
+                        f", target ${valuation['low']:.0f}-${valuation['target']:.0f}-${valuation['high']:.0f}",
+                        f"，估值区间 ${valuation['low']:.0f}-${valuation['target']:.0f}-${valuation['high']:.0f}",
+                        lang,
+                    )
+                    if valuation
+                    else ""
+                )
+                lines.append(
+                    f"- {prefix}{label}（{price}, score {s['score']}, "
+                    f"risk {s.get('risk_level', 'medium')}, confidence {s.get('confidence', 'low')}{val_text}）: "
+                    f"{s.get('reason', '')}"
+                )
             lines.append("")
 
     if report.get("news"):
@@ -847,7 +1045,7 @@ _CSS_PALETTE_LIGHT = (
     "--line:#e3e0d4;--line-2:#d6d3c5;"
     "--ink:#141413;--ink-soft:#34322c;--muted:#6f6d62;--faint:#9a988c;"
     "--orange:#d97757;--orange-deep:#c25e3f;--orange-soft:#f3e0d7;"
-    "--blue:#6a9bcc;--green:#788c5d;--down:#c25e3f;"
+    "--blue:#6a9bcc;--green:#788c5d;--green-deep:#5f7548;--down:#c25e3f;--down-deep:#a84a30;"
 )
 
 _CSS_PALETTE_DARK = (
@@ -855,7 +1053,7 @@ _CSS_PALETTE_DARK = (
     "--line:#3a3830;--line-2:#4a4738;"
     "--ink:#f0efe9;--ink-soft:#d6d4ca;--muted:#a3a193;--faint:#7b796d;"
     "--orange:#e08b6d;--orange-deep:#d97757;--orange-soft:#4a2f24;"
-    "--blue:#7fabd6;--green:#96a97a;--down:#e2836a;"
+    "--blue:#7fabd6;--green:#96a97a;--green-deep:#7c8f63;--down:#e2836a;--down-deep:#c96b52;"
 )
 
 _CSS_FONTS_WEB = (
@@ -919,6 +1117,7 @@ _CSS_COMPONENTS = """
 .qa-report .tile { background: var(--card); padding: 18px 18px 16px; }
 .qa-report .tile .t-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .qa-report .tile .t-value { font-family: var(--mono); font-size: 27px; font-weight: 700; margin-top: 8px; color: var(--ink); }
+.qa-report .tile .t-sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 6px; }
 
 /* Recommendation columns */
 .qa-report .reco-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 16px; }
@@ -931,13 +1130,27 @@ _CSS_COMPONENTS = """
 .qa-report .reco-tag { font-size: 11px; color: var(--faint); font-family: var(--mono); }
 .qa-report .pick { padding: 13px 18px; border-bottom: 1px solid var(--sand); }
 .qa-report .pick:last-child { border-bottom: 0; }
+.qa-report .pick.is-holding { background: linear-gradient(90deg, var(--orange-soft), transparent 60%); }
 .qa-report .pick-row { display: flex; align-items: center; gap: 10px; }
 .qa-report .rank { font-family: var(--mono); font-size: 11px; color: var(--faint); width: 16px; }
 .qa-report .ticker { font-family: var(--mono); font-weight: 700; font-size: 16px; color: var(--ink); letter-spacing: 0.01em; }
+.qa-report .name-zh { font-family: var(--body); font-weight: 400; font-size: 0.85em; color: var(--muted); margin-left: 4px; }
 .qa-report .price { margin-left: auto; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.qa-report .pick-badges { display: flex; gap: 6px; margin-left: 26px; margin-top: 7px; flex-wrap: wrap; }
+.qa-report .pick-badge { font-family: var(--mono); font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+.qa-report .pick-badge.high { color: var(--down); }
+.qa-report .pick-badge.low { color: var(--green); }
+.qa-report .pick-badge.holding { color: var(--orange-deep); border-color: var(--orange-soft); background: var(--orange-soft); }
 .qa-report .bar { height: 5px; border-radius: 3px; background: var(--sand-2); margin: 10px 0 7px; overflow: hidden; }
 .qa-report .bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--orange-deep), var(--orange)); border-radius: 3px; }
+.qa-report .range { margin: 10px 0 7px; }
+.qa-report .range-track { position: relative; height: 6px; border-radius: 3px; background: var(--sand-2); }
+.qa-report .range-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: linear-gradient(90deg, var(--orange-deep), var(--orange)); }
+.qa-report .range-target { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink-soft); }
+.qa-report .range-caption { display: flex; justify-content: space-between; margin-top: 5px; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+.qa-report .range-caption .tgt { color: var(--orange-deep); }
 .qa-report .pick .why { font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
+.qa-report .pick .why.pos { color: var(--green); } .qa-report .pick .why.neg { color: var(--down); }
 
 /* Data tables (holdings / buy / risk) */
 .qa-report .panel { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--card); }
@@ -950,6 +1163,8 @@ _CSS_COMPONENTS = """
 .qa-report td.sym { font-family: var(--mono); font-weight: 700; font-size: 15px; }
 .qa-report .buy td.sym { color: var(--green); } .qa-report .risk td.sym { color: var(--down); }
 .qa-report .holdings td.sym { color: var(--orange-deep); }
+.qa-report td.spark-cell { line-height: 0; }
+.qa-report svg.spark { vertical-align: middle; }
 .qa-report td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .qa-report .why-cell { color: var(--muted); font-size: 12.5px; max-width: 320px; }
 .qa-report .pos { color: var(--green); } .qa-report .neg { color: var(--down); } .qa-report .flat { color: var(--muted); } .qa-report .muted { color: var(--faint); }
@@ -1017,10 +1232,11 @@ def _html_sections(report: dict[str, Any], lang: str) -> str:
     body = [
         _html_holdings(report, n, lang),  # 用户最关心自己的钱：持仓永远排最前
         _html_overview(report, n, lang),
+        _html_funds(report, n, lang),
         _html_narrative(report, n, lang),
         _html_reco(report, n, lang),
-        _html_table(report, "buy_candidates", tr("Worth watching", "相对值得关注", lang), n, lang),
-        _html_table(report, "high_risk", tr("High-risk names", "高风险标的", lang), n, lang),
+        _html_table(report, "buy_candidates", tr("Potential picks", "潜力股", lang), n, lang),
+        _html_table(report, "high_risk", tr("High risk", "高风险", lang), n, lang),
         _html_news(report, n, lang),
         _html_company(report, n, lang),
         _html_social(report, n, lang),
@@ -1093,6 +1309,14 @@ def _esc(value: Any) -> str:
     return html.escape(str(value))
 
 
+def _ticker_html(symbol: str, name: str | None) -> str:
+    """Ticker code, plus its Chinese display name in a muted span when known."""
+    out = _esc(symbol)
+    if name:
+        out += f' <span class="name-zh">{_esc(name)}</span>'
+    return out
+
+
 def _sec_head(num: str, title: str, hint: str = "") -> str:
     hint_html = f'<span class="hint">{_esc(hint)}</span>' if hint else ""
     return f'<div class="sec-head"><span class="sec-num">{num}</span><h2>{_esc(title)}</h2>{hint_html}</div>'
@@ -1119,6 +1343,23 @@ def _money_html(value: Any, signed: bool = False, colored: bool = False) -> str:
     return f'<span class="{cls}">{_esc(text)}</span>'
 
 
+def _sparkline_svg(values: list[float], width: int = 72, height: int = 24) -> str:
+    """Inline SVG sparkline (no chart library — artifact HTML must stay self-contained)."""
+    if len(values) < 2:
+        return '<span class="muted">—</span>'
+    lo, hi = min(values), max(values)
+    span = hi - lo or 1.0
+    step = width / (len(values) - 1)
+    points = " ".join(f"{i * step:.1f},{height - (v - lo) / span * height:.1f}" for i, v in enumerate(values))
+    color = "var(--green)" if values[-1] >= values[0] else "var(--down)"
+    return (
+        f'<svg class="spark" viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
+        f'preserveAspectRatio="none" aria-hidden="true">'
+        f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="1.6" '
+        'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    )
+
+
 def _html_holdings(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
     holdings = report.get("holdings") or {}
     positions = holdings.get("positions") or []
@@ -1137,13 +1378,14 @@ def _html_holdings(report: dict[str, Any], n: _SectionCounter, lang: str = "en")
         for label, value in tiles
     )
     ths = tr(
-        "Symbol|Shares|Price|Day|Mkt value|Cost/share|P&L|P&L %",
-        "代码|股数|现价|当日|市值|成本价|盈亏|盈亏 %",
+        "Symbol|Trend|Shares|Price|Day|Mkt value|Cost/share|P&L|P&L %",
+        "代码|走势|股数|现价|当日|市值|成本价|盈亏|盈亏 %",
         lang,
     ).split("|")
     head = "<tr>" + "".join(f"<th>{_esc(t)}</th>" for t in ths) + "</tr>"
     rows = "".join(
-        f'<tr><td class="sym">{_esc(p["symbol"])}</td>'
+        f'<tr><td class="sym">{_ticker_html(p["symbol"], p.get("name_zh"))}</td>'
+        f'<td class="spark-cell">{_sparkline_svg(p.get("spark") or [])}</td>'
         f'<td class="num">{_esc(_fmt_qty(p["shares"]))}</td>'
         f'<td class="num">{_money_html(p.get("price"))}</td>'
         f'<td class="num">{_delta(p.get("day_change_pct"))}</td>'
@@ -1190,6 +1432,51 @@ def _html_narrative(report: dict[str, Any], n: _SectionCounter, lang: str = "en"
     return f'<section>{_sec_head(n.next(), tr("AI synthesis", "AI 综合分析", lang), "model synthesis")}<div class="narrative">{_esc(narrative)}</div></section>'
 
 
+def _pick_range_html(s: dict[str, Any], lang: str) -> str:
+    """Valuation-range bar (low/target/high with the current price marked); falls back to the
+    plain relative-strength bar when no analyst coverage was found for the symbol."""
+    valuation = s.get("valuation")
+    price = s.get("last_price")
+    if not valuation or price is None:
+        strength = int(s.get("strength", 60))
+        return f'<div class="bar"><span style="width:{strength}%"></span></div>'
+    low, target, high = valuation["low"], valuation["target"], valuation["high"]
+    span = high - low
+    price_pct = max(0.0, min(100.0, (price - low) / span * 100))
+    target_pct = max(0.0, min(100.0, (target - low) / span * 100))
+    # Below target = still upside to consensus (green); above target = already past it (red).
+    fill_gradient = (
+        "linear-gradient(90deg, var(--green-deep), var(--green))"
+        if price <= target
+        else "linear-gradient(90deg, var(--down-deep), var(--down))"
+    )
+    return (
+        '<div class="range"><div class="range-track">'
+        f'<span class="range-fill" style="width:{price_pct:.1f}%;background:{fill_gradient}"></span>'
+        f'<span class="range-target" style="left:{target_pct:.1f}%"></span></div>'
+        '<div class="range-caption">'
+        f'<span>{_esc(tr("Low", "低", lang))} ${low:,.0f}</span>'
+        f'<span class="tgt">{_esc(tr("Target", "目标", lang))} ${target:,.0f}</span>'
+        f'<span>{_esc(tr("High", "高", lang))} ${high:,.0f}</span>'
+        "</div></div>"
+    )
+
+
+def _holding_badge_html(s: dict[str, Any], lang: str) -> str:
+    holding = s.get("holding")
+    if not holding:
+        return ""
+    shares = _esc(_fmt_qty(holding.get("shares")))
+    pnl_pct = holding.get("unrealized_pnl_pct")
+    if pnl_pct is None:
+        pnl_html = '<span class="muted">—</span>'
+    else:
+        cls = "pos" if pnl_pct > 0 else "neg" if pnl_pct < 0 else "flat"
+        pnl_html = f'<span class="{cls}">{pnl_pct:+.1f}%</span>'
+    label = _esc(tr(f"held {shares} sh", f"持仓 {shares} 股", lang))
+    return f'<span class="pick-badge holding">{label} · {pnl_html}</span>'
+
+
 def _html_reco(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
     quant = report.get("quant_candidates") or {}
     if not quant:
@@ -1199,12 +1486,22 @@ def _html_reco(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> 
         picks = []
         for i, s in enumerate(data.get("symbols", []), start=1):
             price = f"${s['last_price']}" if s.get("last_price") is not None else "—"
-            strength = int(s.get("strength", 60))
+            risk = str(s.get("risk_level", "medium"))
+            confidence = str(s.get("confidence", "low"))
+            risk_label = tr(f"risk {risk}", f"风险 {_level_zh(risk)}", lang)
+            confidence_label = tr(f"confidence {confidence}", f"置信度 {_level_zh(confidence)}", lang)
+            ticker_html = _ticker_html(s["symbol"], s.get("name_zh"))
+            day_value = s.get("day_change_value")
+            why_cls = "pos" if (day_value or 0) > 0 else "neg" if (day_value or 0) < 0 else "flat"
             picks.append(
-                f'<div class="pick"><div class="pick-row"><span class="rank">{i:02d}</span>'
-                f'<span class="ticker">{_esc(s["symbol"])}</span><span class="price">{_esc(price)}</span></div>'
-                f'<div class="bar"><span style="width:{strength}%"></span></div>'
-                f'<div class="why">{_esc(s.get("reason", ""))}</div></div>'
+                f'<div class="pick{" is-holding" if s.get("holding") else ""}">'
+                f'<div class="pick-row"><span class="rank">{i:02d}</span>'
+                f'<span class="ticker">{ticker_html}</span><span class="price">{_esc(price)}</span></div>'
+                f'<div class="pick-badges">{_holding_badge_html(s, lang)}'
+                f'<span class="pick-badge {risk}">{_esc(risk_label)}</span>'
+                f'<span class="pick-badge">{_esc(confidence_label)}</span></div>'
+                f"{_pick_range_html(s, lang)}"
+                f'<div class="why {why_cls}">{_esc(s.get("reason", ""))}</div></div>'
             )
         if not picks:
             continue
@@ -1215,8 +1512,32 @@ def _html_reco(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> 
         )
     if not columns:
         return ""
-    head = _sec_head(n.next(), tr("Research picks by holding horizon", "按持有周期的研究推荐", lang), tr("long / mid / short …", "长线 / 中线 / 短线 …", lang))
+    head = _sec_head(n.next(), tr("Research picks by holding horizon", "按持有周期的研究推荐", lang), tr("long / medium / short", "长线 / 中线 / 短线", lang))
     return f'<section>{head}<div class="reco-grid">{"".join(columns)}</div></section>'
+
+
+def _html_funds(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
+    funds = report.get("fund_trackers") or []
+    if not funds:
+        return ""
+    cards = []
+    for f in funds:
+        day_pct = f.get("day_change_pct")
+        day_value = f.get("day_change_value")
+        if day_pct is None or day_value is None:
+            day_html = '<span class="muted">—</span>'
+        else:
+            cls = "pos" if day_value > 0 else "neg" if day_value < 0 else "flat"
+            day_html = f'<span class="{cls}">{day_value:+.2f} ({day_pct:+.2f}%)</span>'
+        cards.append(
+            '<div class="tile fund">'
+            f'<div class="t-label">{_esc(f["symbol"])} · {_esc(f["label"])}</div>'
+            f'<div class="t-value">${f["last_price"]:,.2f}</div>'
+            f'<div class="t-sub">{day_html} · 5D {_delta(f.get("ret_5d_pct"))} · 1M {_delta(f.get("ret_21d_pct"))}</div>'
+            "</div>"
+        )
+    head = _sec_head(n.next(), tr("Fund & index tracker", "基金/指数追踪", lang), tr("Nasdaq / S&P 500 / semis / AI", "纳指 / 标普500 / 半导体 / AI", lang))
+    return f'<section>{head}<div class="tiles">{"".join(cards)}</div></section>'
 
 
 def _html_table(report: dict[str, Any], key: str, title: str, n: _SectionCounter, lang: str = "en") -> str:
@@ -1227,22 +1548,22 @@ def _html_table(report: dict[str, Any], key: str, title: str, n: _SectionCounter
         ths = tr("Symbol|Last|1M|5D|Ann. vol|Reason", "代码|最新价|近1月|近5日|年化波动|依据", lang).split("|")
         head = "<tr>" + "".join(f"<th>{_esc(t)}</th>" for t in ths) + "</tr>"
         body = "".join(
-            f'<tr><td class="sym">{_esc(c["symbol"])}</td><td class="num">{c["last_price"]}</td>'
+            f'<tr><td class="sym">{_ticker_html(c["symbol"], c.get("name_zh"))}</td><td class="num">{c["last_price"]}</td>'
             f'<td class="num">{_delta(c.get("ret_21d_pct"))}</td><td class="num">{_delta(c.get("ret_5d_pct"))}</td>'
             f'<td class="num muted">{c.get("vol_annual_pct")}%</td><td class="why-cell">{_esc(c.get("reason", ""))}</td></tr>'
             for c in rows_data
         )
         cls, hint = "buy", tr("uptrend · contained vol", "趋势向上 · 波动可控", lang)
     else:
-        ths = tr("Symbol|Last|5D|Ann. vol|1Y max DD|Reason", "代码|最新价|近5日|年化波动|近一年最大回撤|依据", lang).split("|")
+        ths = tr("Symbol|Last|Dist. from high|1M|5D|Reason", "代码|最新价|距52周高点|近1月|近5日|依据", lang).split("|")
         head = "<tr>" + "".join(f"<th>{_esc(t)}</th>" for t in ths) + "</tr>"
         body = "".join(
-            f'<tr><td class="sym">{_esc(c["symbol"])}</td><td class="num">{c["last_price"]}</td>'
-            f'<td class="num">{_delta(c.get("ret_5d_pct"))}</td><td class="num neg">{c.get("vol_annual_pct")}%</td>'
-            f'<td class="num neg">{c.get("max_drawdown_252_pct")}%</td><td class="why-cell">{_esc(c.get("reason", ""))}</td></tr>'
+            f'<tr><td class="sym">{_ticker_html(c["symbol"], c.get("name_zh"))}</td><td class="num">{c["last_price"]}</td>'
+            f'<td class="num">{c.get("dist_from_high_pct")}%</td><td class="num">{_delta(c.get("ret_21d_pct"))}</td>'
+            f'<td class="num">{_delta(c.get("ret_5d_pct"))}</td><td class="why-cell">{_esc(c.get("reason", ""))}</td></tr>'
             for c in rows_data
         )
-        cls, hint = "risk", tr("high vol · deep drawdown · sharp drop", "高波动 · 深回撤 · 急跌", lang)
+        cls, hint = "risk", tr("near highs · overextended · sharp drop", "近高位 · 涨幅超涨 · 急跌", lang)
     return (
         f'<section>{_sec_head(n.next(), title, hint)}'
         f'<div class="panel"><table class="{cls}"><thead>{head}</thead><tbody>{body}</tbody></table></div></section>'
@@ -1278,7 +1599,7 @@ def _html_company(report: dict[str, Any], n: _SectionCounter, lang: str = "en") 
             f' <span class="pub">{_esc(item.get("publisher", ""))}</span></li>'
             for item in items
         )
-        cards.append(f'<div class="co"><h3>{_esc(symbol)}</h3><ul>{lis}</ul></div>')
+        cards.append(f'<div class="co"><h3>{_ticker_html(symbol, name_zh(symbol))}</h3><ul>{lis}</ul></div>')
     return f'<section>{_sec_head(n.next(), tr("Per-company news", "重点个股资讯", lang))}<div class="co-grid">{"".join(cards)}</div></section>'
 
 

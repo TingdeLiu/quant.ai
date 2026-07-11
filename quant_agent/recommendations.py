@@ -11,28 +11,18 @@ from quant_agent.config import AppConfig
 RECOMMENDATION_PROFILES: dict[str, dict[str, Any]] = {
     "long_term": {
         "label": "Long Term",
-        "horizon": "6-12 months",
-        "weights": {"momentum_12_1_z": 0.45, "trend_20_50_z": 0.25, "low_volatility_z": 0.20, "ml_rank_z": 0.10},
+        "horizon": "6-24 months",
+        "weights": {"momentum_12_1_z": 0.40, "trend_20_50_z": 0.25, "low_volatility_z": 0.25, "ml_rank_z": 0.10},
     },
-    "swing": {
-        "label": "Swing",
-        "horizon": "1-3 months",
-        "weights": {"trend_20_50_z": 0.35, "reversal_1m_z": 0.30, "momentum_12_1_z": 0.20, "ml_rank_z": 0.15},
+    "medium_term": {
+        "label": "Medium Term",
+        "horizon": "1-6 months",
+        "weights": {"trend_20_50_z": 0.35, "reversal_1m_z": 0.25, "momentum_12_1_z": 0.25, "ml_rank_z": 0.15},
     },
     "short_term": {
         "label": "Short Term",
         "horizon": "1-4 weeks",
         "weights": {"reversal_1m_z": 0.45, "trend_20_50_z": 0.25, "momentum_12_1_z": 0.15, "ml_rank_z": 0.15},
-    },
-    "defensive": {
-        "label": "Defensive",
-        "horizon": "3-12 months",
-        "weights": {"low_volatility_z": 0.55, "trend_20_50_z": 0.20, "momentum_12_1_z": 0.15, "ml_rank_z": 0.10},
-    },
-    "aggressive": {
-        "label": "Aggressive",
-        "horizon": "1-6 months",
-        "weights": {"momentum_12_1_z": 0.45, "trend_20_50_z": 0.30, "ml_rank_z": 0.20, "low_volatility_z": -0.05},
     },
 }
 
@@ -73,8 +63,8 @@ def build_recommendations(
                     "symbol": row["symbol"],
                     "suggested_action": "research_buy_candidate",
                     "recommendation_score": score,
-                    "confidence": _confidence(score),
-                    "risk_level": _risk_level(profile, row),
+                    "confidence": recommendation_confidence(score),
+                    "risk_level": classify_recommendation_risk(row),
                     "target_weight": float(row.get("target_weight", 0.0) or 0.0),
                     "research_weight": min(float(config.risk.max_position_weight), 1.0 / max(config.strategy.top_n, 1)),
                     "latest_price": float(row["latest_price"]) if pd.notna(row.get("latest_price")) else None,
@@ -129,7 +119,7 @@ def _profile_score(frame: pd.DataFrame, weights: dict[str, float]) -> pd.Series:
     return pd.concat(parts, axis=1).sum(axis=1, min_count=1) / total
 
 
-def _confidence(score: float) -> str:
+def recommendation_confidence(score: float) -> str:
     if score >= 1.0:
         return "high"
     if score >= 0.35:
@@ -137,13 +127,9 @@ def _confidence(score: float) -> str:
     return "low"
 
 
-def _risk_level(profile: str, row: pd.Series) -> str:
+def classify_recommendation_risk(row: pd.Series) -> str:
     volatility = row.get("volatility_20")
     low_vol_z = row.get("low_volatility_z")
-    if profile == "aggressive":
-        return "high"
-    if profile == "defensive":
-        return "low" if pd.notna(low_vol_z) and float(low_vol_z) > 0 else "medium"
     if pd.notna(volatility) and float(volatility) > 0.035:
         return "high"
     if pd.notna(low_vol_z) and float(low_vol_z) > 0.5:

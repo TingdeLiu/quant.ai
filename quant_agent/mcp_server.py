@@ -130,7 +130,7 @@ class MarketsDataInput(ConfigInput):
 class RecommendationsInput(ConfigInput):
     profile: str | None = Field(
         default=None,
-        description="Optional horizon filter: one of 'long_term', 'swing', 'short_term', 'defensive', 'aggressive'. Omit for all.",
+        description="Optional horizon filter: one of 'long_term', 'medium_term', 'short_term'. Omit for all.",
     )
     per_profile: int = Field(default=5, description="Number of candidates per profile.", ge=1, le=25)
 
@@ -363,7 +363,7 @@ async def quant_get_markets_data(params: MarketsDataInput) -> dict[str, Any]:
 async def quant_get_recommendations(params: RecommendationsInput) -> dict[str, Any]:
     """Return categorized research buy-candidates by holding horizon.
 
-    Profiles: long_term (6-12m), swing (1-3m), short_term (1-4w), defensive, aggressive. Each
+    Profiles: long_term (6-24m), medium_term (1-6m), short_term (1-4w). Each
     candidate includes rank, symbol, recommendation_score, confidence, risk_level, latest_price,
     a reason from the top signal contributions, and a research_weight. These are research
     candidates only — not orders or investment advice.
@@ -371,7 +371,7 @@ async def quant_get_recommendations(params: RecommendationsInput) -> dict[str, A
     Args:
         params (RecommendationsInput):
             - config (str): config path relative to project root.
-            - profile (Optional[str]): filter to one horizon; omit for all five.
+            - profile (Optional[str]): filter to one horizon; omit for all three.
             - per_profile (int): candidates per profile (1-25).
 
     Returns:

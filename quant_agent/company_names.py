@@ -1,0 +1,81 @@
+"""Chinese display names for common US-listed tickers.
+
+覆盖 configs/*universe*.csv 里出现的代码；未收录的代码在报告里就只显示代码本身，
+不猜测、不报错——这是展示层的锦上添花，不是权威数据源。
+"""
+
+from __future__ import annotations
+
+COMPANY_NAMES_ZH: dict[str, str] = {
+    "AAPL": "苹果",
+    "MSFT": "微软",
+    "NVDA": "英伟达",
+    "AMZN": "亚马逊",
+    "GOOGL": "谷歌A",
+    "GOOG": "谷歌C",
+    "META": "Meta",
+    "TSLA": "特斯拉",
+    "AVGO": "博通",
+    "LLY": "礼来",
+    "JPM": "摩根大通",
+    "V": "Visa",
+    "UNH": "联合健康",
+    "XOM": "埃克森美孚",
+    "MA": "万事达",
+    "COST": "好市多",
+    "HD": "家得宝",
+    "PG": "宝洁",
+    "JNJ": "强生",
+    "NFLX": "奈飞",
+    "AMD": "超威半导体",
+    "CRM": "Salesforce",
+    "BAC": "美国银行",
+    "KO": "可口可乐",
+    "PEP": "百事可乐",
+    "WMT": "沃尔玛",
+    "SPY": "标普500ETF",
+    "QCOM": "高通",
+    "INTC": "英特尔",
+    "TXN": "德州仪器",
+    "MU": "美光科技",
+    "AMAT": "应用材料",
+    "LRCX": "泛林集团",
+    "KLAC": "科磊",
+    "ADI": "亚德诺半导体",
+    "MRVL": "迈威尔科技",
+    "NXPI": "恩智浦半导体",
+    "ASML": "阿斯麦",
+    "TSM": "台积电",
+    "DIS": "华特迪士尼",
+    "CMCSA": "康卡斯特",
+    "T": "美国电话电报",
+    "VZ": "威瑞森",
+    "TMUS": "T-Mobile美国",
+    "SPOT": "Spotify",
+    "TTD": "The Trade Desk",
+    "PINS": "Pinterest",
+    "SNAP": "Snap",
+    "DDOG": "Datadog",
+    "CAT": "卡特彼勒",
+    "CSCO": "思科",
+    "NUE": "纽柯钢铁",
+    "PANW": "派拓网络",
+    "CRWD": "CrowdStrike",
+    "GS": "高盛",
+    "MS": "摩根士丹利",
+    "SNOW": "Snowflake",
+    "F": "福特汽车",
+    "CVS": "CVS Health",
+    "C": "花旗集团",
+    "VLO": "瓦莱罗能源",
+    "QQQ": "纳斯达克100ETF",
+    "SMH": "半导体ETF",
+    "AIQ": "人工智能ETF",
+    "DIA": "道琼斯ETF",
+    "IWM": "罗素2000ETF",
+}
+
+
+def name_zh(symbol: str) -> str | None:
+    """Chinese display name for ``symbol``, or ``None`` if not in the curated map."""
+    return COMPANY_NAMES_ZH.get(symbol.strip().upper())

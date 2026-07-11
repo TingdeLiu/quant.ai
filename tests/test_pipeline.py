@@ -69,6 +69,8 @@ def test_full_pipeline_writes_expected_outputs(tmp_path: Path) -> None:
     assert (tmp_path / "reports" / "recommendations.csv").exists()
     assert (tmp_path / "reports" / "recommendations.json").exists()
     assert (tmp_path / "reports" / "recommendations_long_term.csv").exists()
+    assert (tmp_path / "reports" / "recommendations_medium_term.csv").exists()
+    assert (tmp_path / "reports" / "recommendations_short_term.csv").exists()
     assert not result["period_metrics"].empty
     assert not result["exposure"].empty
     assert not result["signal_diagnostics"].empty
@@ -143,7 +145,9 @@ def test_recommendations_generate_multiple_horizons(tmp_path: Path) -> None:
     targets = build_target_positions(signals, config.strategy, config.risk)
     recommendations, payload = build_recommendations(signals, prices, targets, config, per_profile=3)
 
+    assert list(RECOMMENDATION_PROFILES) == ["long_term", "medium_term", "short_term"]
     assert set(recommendations["recommendation_type"]) == set(RECOMMENDATION_PROFILES)
+    assert set(recommendations["horizon"]) == {"6-24 months", "1-6 months", "1-4 weeks"}
     assert recommendations.groupby("recommendation_type")["rank"].max().eq(3).all()
     assert {"symbol", "confidence", "risk_level", "reason", "latest_price", "data_date"}.issubset(
         recommendations.columns

@@ -67,7 +67,7 @@ Claude（或 Codex）会调取项目的真实数据，把量化分析摆在你�
 
 ## 每日报告与 dashboard
 
-`quant-ai market-report` 生成每日美股研究简报——你的持仓盈亏（设置后）、市场概览、关注/高风险名单、按持有周期的量化候选、免费新闻头条——Anthropic 风格设计，产出 HTML + 自包含 artifact + Markdown + JSON：
+`quant-ai market-report` 生成每日美股研究简报——你的持仓盈亏（带每仓位走势折线图）、市场概览、基金/指数追踪（纳指100/标普500/半导体/AI）、潜力股/高风险名单、按持有周期的研究推荐（代码带中文名、机构估值区间条、当日涨跌、持仓标的置顶）、免费新闻头条——Anthropic 风格设计，产出 HTML + 自包含 artifact + Markdown + JSON：
 
 <img src="assets/market-report-example-zh.png" alt="每日市场报告（中文）——你的持仓盈亏开篇" width="820">
 

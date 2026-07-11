@@ -347,10 +347,8 @@ _SOURCE_META = {
 }
 _RISK_OPTIONS = [
     ("long_term", "Long-term", "长线"),
-    ("swing", "Swing", "波段"),
+    ("medium_term", "Medium-term", "中线"),
     ("short_term", "Short-term", "短线"),
-    ("defensive", "Defensive", "防守"),
-    ("aggressive", "Aggressive", "激进"),
 ]
 
 
@@ -386,8 +384,8 @@ def _prompt_sectors(catalog, lang: str) -> list[str]:
 
 def _prompt_risk(lang: str) -> str:
     labels = [f"{i + 1}.{tr(en, zh, lang)}" for i, (_, en, zh) in enumerate(_RISK_OPTIONS)]
-    console.print(f"[dim]{tr('Risk preference', '风险偏好', lang)}: {' / '.join(labels)}[/dim]")
-    raw = Prompt.ask(tr("Choose risk (number)", "选择风险偏好（编号）", lang), default="1")
+    console.print(f"[dim]{tr('Research horizon', '研究周期', lang)}: {' / '.join(labels)}[/dim]")
+    raw = Prompt.ask(tr("Choose horizon (number)", "选择研究周期（编号）", lang), default="1")
     idx = int(raw) - 1 if raw.strip().isdigit() and 1 <= int(raw) <= len(_RISK_OPTIONS) else 0
     return _RISK_OPTIONS[idx][0]
 
@@ -441,7 +439,7 @@ def init_command(
     base_config: Path = typer.Option(Path("configs/default.yaml"), "--base-config", help="继承的基础配置"),
     sectors: list[str] | None = typer.Option(None, "--sector", help="非交互：指定板块（可多次）"),
     tickers: list[str] | None = typer.Option(None, "--ticker", help="非交互：指定关注的股票代码（可多次/逗号分隔）"),
-    risk: str | None = typer.Option(None, "--risk", help="risk: long_term/swing/short_term/defensive/aggressive"),
+    risk: str | None = typer.Option(None, "--risk", help="research horizon: long_term/medium_term/short_term"),
     benchmark: str = typer.Option("SPY", "--benchmark", help="基准代码"),
     lang: str | None = typer.Option(None, "--lang", "-l", help="language en/zh (default en)"),
     non_interactive: bool = typer.Option(False, "--non-interactive", help="不弹问答，直接用上面的参数生成"),

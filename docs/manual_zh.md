@@ -41,12 +41,11 @@
 ### 分类型研究买入候选
 
 - 每次回测会基于最新可用日线数据输出研究候选名单，不构成投资建议或实盘交易授权。
-- 支持五类候选：
-  - `long_term`: 长期，侧重 12-1 动量、趋势和低波动。
-  - `swing`: 波段，侧重 20/50 趋势、1 月反转和动量。
-  - `short_term`: 短期，侧重 1 月反转、短趋势和近期分数。
-  - `defensive`: 防守，侧重低波动和趋势稳定性。
-  - `aggressive`: 激进，侧重高动量、高趋势和 ML rank。
+- 支持三类持有周期候选：
+  - `long_term`: 长线（6-24 个月），侧重 12-1 动量、趋势和低波动。
+  - `medium_term`: 中线（1-6 个月），侧重 20/50 趋势、1 月反转和动量。
+  - `short_term`: 短线（1-4 周），侧重 1 月反转、短趋势和近期分数。
+- 防守 / 激进不再作为推荐类别；每个候选通过独立的 `risk_level` 表达风险。
 - 输出总表 `recommendations.csv` 和分类型文件 `recommendations_<type>.csv`。
 - 输出字段包括 rank、symbol、recommendation_score、confidence、risk_level、target_weight、research_weight、latest_price、data_date 和 reason。
 
@@ -85,12 +84,13 @@
   - 重点个股最新资讯（基于 yfinance 个股新闻）。
   - 可选 X / 社交平台 RSS 源，默认关闭。
 - 报告内容基于项目已有的量化信号和历史价格统计，明确区分：
-  - 「相对值得关注」研究候选：趋势向上、近月为正、波动相对可控、接近高点。
-  - 「高风险」标的：高波动、深回撤、近期急跌或显著低于 52 周高点。
-  - 分类型量化候选（长期 / 波段 / 短期 / 防守 / 激进）。
+  - 「潜力股」研究候选：趋势向上、近月为正、波动相对可控、接近高点。
+  - 「高风险」标的：已现急跌/深回撤/高波动，或处于 52 周高点附近且近月涨幅偏多、当前市况下容易回撤的。
+  - 「基金/指数追踪」：固定跟踪纳斯达克100（QQQ）、标普500（SPY）、半导体（SMH）、人工智能（AIQ），与个人 universe 无关，始终展示。
+  - 按持有周期的研究推荐（长线 / 中线 / 短线）。
 - 当 `llm.enabled` 且配置了 API key 时，会用大模型把新闻和量化数据综合成自然语言分析；否则回落到结构化模板，无需任何 key 也能用。
 - 输出文件：`market_intel.json`、`market_intel.md`、`market_intel.html`、`market_intel_artifact.html`（自包含、明暗双主题，供 Claude 直接渲染为 artifact）。
-- HTML 报告采用 Anthropic / Claude 品牌视觉（暖米白底、赤陶橙点缀、Poppins 标题 + Lora 正文、绿涨橙红跌），设有持仓时报告置顶「我的持仓」盈亏段，核心板块为「按持有周期的研究推荐」（长线 / 中线·波段 / 短线 / 防守 / 激进），每只标的带价格、强度条和信号依据。
+- HTML 报告采用 Anthropic / Claude 品牌视觉（暖米白底、赤陶橙点缀、Poppins 标题 + Lora 正文、绿涨橙红跌）；设有持仓时报告置顶「我的持仓」盈亏段，每个仓位带最近走势折线图（内联 SVG）；核心板块为「按持有周期的研究推荐」（长线 / 中线 / 短线），每只标的代码后带中文名（收录常见标的，未收录则只显示代码，「潜力股」「高风险」「我的持仓」「重点个股资讯」等板块同样带中文名）、当前价在机构分析师估值区间（最低/目标/最高）中的位置条（无覆盖时降级为相对强度条）、当日涨跌值与百分比，命中个人持仓的标的置顶（榜首）并标注股数与盈亏。
 - 严格定位为研究，不构成投资建议，也不会生成任何下单指令或实盘授权。
 
 ### Markets 实时分析仪表盘
@@ -801,10 +801,8 @@ signal_weight_search.csv                        权重搜索结果
 recommendations.csv                             分类型研究候选总表
 recommendations.json                            分类型研究候选 JSON
 recommendations_long_term.csv                   长期研究候选
-recommendations_swing.csv                       波段研究候选
+recommendations_medium_term.csv                 中线研究候选
 recommendations_short_term.csv                  短期研究候选
-recommendations_defensive.csv                   防守型研究候选
-recommendations_aggressive.csv                  激进型研究候选
 recommended_signal_weights.json                 validation 推荐权重
 recommended_equity_curve.csv                    recommended strategy 权益曲线
 walk_forward_signal_search.csv                  walk-forward 搜索结果

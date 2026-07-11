@@ -36,8 +36,11 @@ DEFAULT_HISTORY_START = "2020-01-01"
 # 风险偏好 → 推荐打分风格（recommendations.RECOMMENDATION_PROFILES 的 key）。
 # 同时接受中文与英文写法，便于双语 init。
 RISK_TO_PROFILE: dict[str, str] = {
-    "长线": "long_term", "波段": "swing", "短线": "short_term", "防守": "defensive", "激进": "aggressive",
-    "long_term": "long_term", "swing": "swing", "short_term": "short_term", "defensive": "defensive", "aggressive": "aggressive",
+    "长线": "long_term", "中线": "medium_term", "波段": "medium_term", "短线": "short_term",
+    "long_term": "long_term", "medium_term": "medium_term", "short_term": "short_term",
+    # Legacy onboarding values remain readable after the recommendation profiles were simplified.
+    "swing": "medium_term", "defensive": "long_term", "aggressive": "short_term",
+    "防守": "long_term", "激进": "short_term",
 }
 
 # 发现池状态提示，(英文, 中文)。

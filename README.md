@@ -67,7 +67,7 @@ Install https://github.com/TingdeLiu/quant.ai as an MCP server:
 
 ## Daily market report & dashboard
 
-`quant-ai market-report` builds a daily US-equity research brief — your holdings P&L (when set), market overview, watch / high-risk lists, quant picks by holding horizon, and free news headlines — in an Anthropic-style design, written as HTML + a self-contained artifact + Markdown + JSON:
+`quant-ai market-report` builds a daily US-equity research brief — your holdings P&L (with a per-position sparkline), market overview, a fund/index tracker (Nasdaq 100 / S&P 500 / semis / AI), potential-picks / high-risk lists, quant picks by holding horizon (Chinese name, analyst valuation-range bar, day change, held positions pinned to the top), and free news headlines — in an Anthropic-style design, written as HTML + a self-contained artifact + Markdown + JSON:
 
 <img src="assets/market-report-example.png" alt="Daily market report — your holdings P&L opens the brief" width="820">
 
