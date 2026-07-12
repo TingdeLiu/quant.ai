@@ -221,8 +221,9 @@ def doctor_command() -> None:
     net_ok = False
     net_detail = ""
     try:
-        import yfinance as yf
+        from quant_agent.yf_cache import import_yfinance
 
+        yf = import_yfinance()
         raw = yf.download("SPY", period="5d", auto_adjust=False, progress=False)
         net_ok = not raw.empty
         net_detail = f"成功获取 SPY 近 {len(raw)} 条数据" if net_ok else "返回空数据（可能被限流，请稍后重试）"

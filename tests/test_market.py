@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pandas as pd
 from _helpers import _config, _synthetic_prices
 
 from quant_agent.config import parse_config
@@ -28,6 +29,30 @@ def _offline_raw(tmp_path: Path) -> dict:
         "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
         "portfolio": {"path": "pf.json"},
     }
+
+
+def _prices_with_extra_symbol(periods: int, symbol: str, start: float, drift: float) -> pd.DataFrame:
+    """``_synthetic_prices`` plus one more symbol — SPY is now a fund-tracker ETF excluded from
+    the single-stock picks, so tests that need a *real* (name-mapped) ticker among the picks
+    add one here instead of overloading SPY's original 4-symbol synthetic universe."""
+    base = _synthetic_prices(periods=periods)
+    dates = pd.bdate_range("2022-01-03", periods=periods)
+    rows = []
+    for i, date in enumerate(dates):
+        price = start * ((1 + drift) ** i)
+        rows.append(
+            {
+                "date": date,
+                "symbol": symbol,
+                "open": price * 0.99,
+                "high": price * 1.01,
+                "low": price * 0.98,
+                "close": price,
+                "adj_close": price,
+                "volume": 1_000_000,
+            }
+        )
+    return pd.concat([base, pd.DataFrame(rows)], ignore_index=True)
 
 
 def _write_portfolio(tmp_path: Path) -> None:
@@ -187,7 +212,17 @@ def test_write_market_report_writes_artifact(tmp_path: Path) -> None:
 
 
 def test_pick_cards_pin_holding_and_show_valuation_range(tmp_path: Path) -> None:
-    raw = {**_offline_raw(tmp_path), "language": "zh"}
+    # SPY 现在是固定基金追踪 ETF，会被排除出个股类候选榜单，所以另加一只真实代码（MU）
+    # 来验证"命中中文名映射表"这条路径。
+    csv_path = tmp_path / "prices.csv"
+    _prices_with_extra_symbol(periods=620, symbol="MU", start=100.0, drift=0.001).to_csv(csv_path, index=False)
+    raw = {
+        "data": {"source": "csv", "csv_path": str(csv_path), "universe": ["AAA", "BBB", "CCC", "SPY", "MU"]},
+        "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
+        "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
+        "portfolio": {"path": "pf.json"},
+        "language": "zh",
+    }
     (tmp_path / "pf.json").write_text(  # 只持仓 AAA，避免和 _write_portfolio 的 CCC 混在一起
         json.dumps({"holdings": [{"symbol": "AAA", "shares": 10, "cost_basis": 100.0}]}), encoding="utf-8"
     )
@@ -199,21 +234,38 @@ def test_pick_cards_pin_holding_and_show_valuation_range(tmp_path: Path) -> None
 
     for data in report["quant_candidates"].values():
         symbols = data["symbols"]
+        assert "SPY" not in {s["symbol"] for s in symbols}  # 基金追踪 ETF 不进个股候选榜单
         assert symbols[0]["symbol"] == "AAA"  # 持仓标的置顶（榜首 = 01）
         assert symbols[0]["holding"]["shares"] == 10.0
         by_symbol = {s["symbol"]: s for s in symbols}
         assert by_symbol["AAA"]["valuation"] == fake_targets["AAA"]
         assert by_symbol["AAA"]["name_zh"] is None  # 假代码不在中文名映射表里
-        assert by_symbol["SPY"]["name_zh"] == "标普500ETF"
-        assert by_symbol["SPY"]["valuation"] is None  # 无估值数据 -> 卡片降级为旧强度条
-        assert by_symbol["SPY"]["day_change_pct"] is not None
+        assert by_symbol["MU"]["name_zh"] == "美光科技"
+        assert by_symbol["MU"]["valuation"] is None  # 无估值数据 -> 卡片降级为"暂无覆盖"占位
+        assert by_symbol["MU"]["day_change_pct"] is not None
 
     artifact = render_artifact_html(report)
     assert 'class="pick is-holding"' in artifact
-    assert "range-target" in artifact  # AAA 卡片：估值区间条
-    assert '<span class="name-zh">标普500ETF</span>' in artifact
+    assert "range-zero" in artifact  # AAA 卡片：目标价居中的估值偏离条
+    assert "暂无机构估值覆盖" in artifact  # MU 无估值数据 -> 占位文案，不是误导性的条
+    assert '<span class="name-zh">美光科技</span>' in artifact
     assert "12-1动量" not in artifact and "20/50趋势" not in artifact  # z-score 依据已被替换
     assert "当日" in artifact  # 改为显示当日涨跌值/幅度
+
+    # 部分标的取到估值（AAA 有、MU 没有）属于正常降级，不应触发整体取数失败警告。
+    assert not any(w.startswith("analyst_targets_unavailable") for w in report["warnings"])
+
+
+def test_all_targets_missing_adds_fetch_failure_warning(tmp_path: Path) -> None:
+    """入选标的一只估值都没取到时（典型原因是 yfinance 取数环节挂了），报告必须带警告，
+    避免满屏“暂无机构估值覆盖”被误读为机构真的没有覆盖。"""
+    config = parse_config(_offline_raw(tmp_path), base=tmp_path)
+    report = build_market_report(config, target_fetcher=lambda symbols: {})
+
+    assert report["quant_candidates"]  # 前提：确实有入选标的
+    warnings = [w for w in report["warnings"] if w.startswith("analyst_targets_unavailable")]
+    assert len(warnings) == 1
+    assert warnings[0] in render_markdown(report)
 
 
 def test_fund_tracker_section(tmp_path: Path) -> None:
@@ -246,7 +298,15 @@ def test_high_risk_section_flags_near_high(tmp_path: Path) -> None:
 
 
 def test_potential_picks_renamed_and_show_chinese_names(tmp_path: Path) -> None:
-    raw = {**_offline_raw(tmp_path), "language": "zh"}
+    # SPY 现在是基金追踪 ETF，会被排除出「潜力股」榜单，另加一只真实代码（MU）验证中文名。
+    csv_path = tmp_path / "prices.csv"
+    _prices_with_extra_symbol(periods=620, symbol="MU", start=100.0, drift=0.001).to_csv(csv_path, index=False)
+    raw = {
+        "data": {"source": "csv", "csv_path": str(csv_path), "universe": ["AAA", "BBB", "CCC", "SPY", "MU"]},
+        "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
+        "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
+        "language": "zh",
+    }
     config = parse_config(raw, base=tmp_path)
     report = build_market_report(config, target_fetcher=lambda symbols: {})
 
@@ -254,9 +314,9 @@ def test_potential_picks_renamed_and_show_chinese_names(tmp_path: Path) -> None:
     assert "潜力股" in markdown
     assert "相对值得关注" not in markdown
     by_symbol = {c["symbol"]: c for c in report["buy_candidates"]}
-    if "SPY" in by_symbol:
-        assert by_symbol["SPY"]["name_zh"] == "标普500ETF"
-        assert "标普500ETF" in render_html(report)
+    assert "SPY" not in by_symbol  # 基金追踪 ETF 不进「潜力股」榜单
+    assert by_symbol["MU"]["name_zh"] == "美光科技"
+    assert "美光科技" in render_html(report)
 
 
 def test_holdings_table_has_sparkline(tmp_path: Path) -> None:

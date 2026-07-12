@@ -15,6 +15,7 @@ from __future__ import annotations
 import dataclasses
 import html
 import json
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -38,6 +39,7 @@ from quant_agent.recommendations import (
     classify_recommendation_risk,
     recommendation_confidence,
 )
+from quant_agent.yf_cache import import_yfinance
 
 
 def _disclaimer(lang: str) -> str:
@@ -45,10 +47,14 @@ def _disclaimer(lang: str) -> str:
         "This report is for quantitative research and learning only — not investment advice, "
         "and not authorization to trade. The 'potential picks' and 'high risk' lists are research "
         "candidates from public news and historical-price statistics; any real trade needs "
-        "independent data validation, compliance review and risk control.",
+        "independent data validation, compliance review and risk control. The valuation-range bar "
+        "uses sell-side analyst consensus (median target, low/high, via Yahoo Finance) — typically "
+        "a ~12-month view, not intrinsic value, and analyst targets tend to lag and skew optimistic.",
         "本报告仅用于量化研究与学习，不构成投资建议，也不是实盘交易授权。"
         "所谓“潜力股”和“高风险”均为基于公开新闻与历史价格统计的研究候选，"
-        "任何真实交易都需要独立的数据校验、合规审查和风险控制。",
+        "任何真实交易都需要独立的数据校验、合规审查和风险控制。"
+        "估值区间条采用卖方分析师一致预期（中位数目标价及最低/最高，数据源 Yahoo Finance）——"
+        "通常是未来约12个月的展望，不等于内在价值，且分析师预测普遍存在滞后与偏乐观的倾向。",
         lang,
     )
 
@@ -73,34 +79,55 @@ FUND_TRACKERS: list[dict[str, str]] = [
     {"symbol": "SMH", "label_en": "Semiconductors", "label_zh": "半导体"},
     {"symbol": "AIQ", "label_en": "AI & Tech", "label_zh": "人工智能"},
 ]
+# Index/sector ETFs never have analyst price targets and are already covered by their own
+# section above — keep them out of the single-stock picks (潜力股/高风险/研究推荐).
+_FUND_TRACKER_SYMBOLS = {spec["symbol"] for spec in FUND_TRACKERS}
 
-_MAX_TARGET_WORKERS = 8
+_MAX_TARGET_WORKERS = 5
+_TARGET_RETRY_DELAY_S = 0.6
 
 
 def fetch_analyst_price_targets(symbols: list[str]) -> dict[str, dict[str, float]]:
-    """Best-effort analyst price-target range (low/target/high) via yfinance — degrades to partial/{}.
+    """Best-effort analyst price-target range (low/target/high + analyst count) via yfinance —
+    degrades to partial/{}.
 
-    仅对当日入选的推荐标的取数（研究推荐卡片的“机构估值区间”条），单只失败直接跳过，
-    不影响其余标的；线程池上限沿用 holdings.fetch_live_quotes 的写法。
+    仅对当日入选的推荐标的取数（研究推荐卡片的"机构估值区间"条），单只失败直接跳过，
+    不影响其余标的；线程池上限沿用 holdings.fetch_live_quotes 的写法。一次失败重试一次
+    （短暂延时后），缓解并发请求偶发被限流导致同一只标的在报告里退化成旧强度条。
+    用 ``.info`` 而非 ``get_analyst_price_targets()``，同一次请求里顺带拿到覆盖机构数
+    （``numberOfAnalystOpinions``），供卡片标注置信度用，实测耗时相近、不多花网络成本。
     """
     if not symbols:
         return {}
     try:
-        import yfinance as yf
+        yf = import_yfinance()
     except Exception:
         return {}
 
-    def _one(symbol: str) -> tuple[str, dict[str, float]] | None:
-        try:
-            targets = yf.Ticker(symbol).get_analyst_price_targets()
-            low = targets.get("low")
-            high = targets.get("high")
-            mid = targets.get("median", targets.get("mean"))
-            if low is None or high is None or mid is None or float(high) <= float(low):
-                return None
-            return symbol, {"low": float(low), "target": float(mid), "high": float(high)}
-        except Exception:
+    def _fetch(symbol: str) -> dict[str, float] | None:
+        info = yf.Ticker(symbol).info
+        low = info.get("targetLowPrice")
+        high = info.get("targetHighPrice")
+        mid = info.get("targetMedianPrice", info.get("targetMeanPrice"))
+        if low is None or high is None or mid is None or float(high) <= float(low):
             return None
+        result = {"low": float(low), "target": float(mid), "high": float(high)}
+        analyst_count = info.get("numberOfAnalystOpinions")
+        if analyst_count is not None:
+            result["analyst_count"] = int(analyst_count)
+        return result
+
+    def _one(symbol: str) -> tuple[str, dict[str, float]] | None:
+        for attempt in range(2):
+            try:
+                result = _fetch(symbol)
+                if result is not None:
+                    return symbol, result
+            except Exception:
+                pass
+            if attempt == 0:
+                time.sleep(_TARGET_RETRY_DELAY_S)
+        return None
 
     workers = max(1, min(_MAX_TARGET_WORKERS, len(symbols)))
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -242,7 +269,7 @@ def _attach_valuation_and_holdings(
     """Attach the analyst valuation range to each pick and pin held symbols to the front.
 
     就地修改 ``report["quant_candidates"]``：每只标的挂上 ``valuation``（估值区间，取不到则
-    为 None，卡片降级为旧的强度条）和 ``holding``（命中本人持仓时的股数/成本/盈亏）；
+    为 None，卡片降级为"暂无机构估值覆盖"占位文案）和 ``holding``（命中本人持仓时的股数/成本/盈亏）；
     每个持有周期栏目内，命中持仓的标的稳定排到最前（榜首 = 01）。
     """
     quant = report["quant_candidates"]
@@ -253,6 +280,14 @@ def _attach_valuation_and_holdings(
                 all_symbols.append(s["symbol"])
     fetcher = target_fetcher if target_fetcher is not None else fetch_analyst_price_targets
     valuations = fetcher(all_symbols) if all_symbols else {}
+    if all_symbols and not valuations:
+        # 大盘个股几乎总有分析师覆盖：全军覆没基本可以断定是取数环节挂了（网络 /
+        # yfinance cookie 缓存），必须在报告里说明，否则满屏“暂无机构估值覆盖”会误导读者。
+        report["warnings"].append(
+            f"analyst_targets_unavailable: got 0 analyst price targets for all {len(all_symbols)} "
+            "pick symbols — the 'no analyst coverage' placeholders below almost certainly mean the "
+            "fetch failed (network / yfinance cache), not that coverage is actually missing"
+        )
     holding_positions = {p["symbol"]: p for p in report.get("holdings", {}).get("positions", [])}
 
     for data in quant.values():
@@ -330,8 +365,10 @@ def _price_analysis(prices: pd.DataFrame, benchmark: str, lang: str = "en") -> d
 
     frame = pd.DataFrame(rows)
     overview = _market_overview(frame, benchmark)
-    buy_candidates = _rank_buy_candidates(frame, lang)
-    high_risk = _rank_high_risk(frame, lang)
+    # Benchmark lookup needs the full frame; candidate ranking excludes the fixed fund/index ETFs.
+    candidate_frame = frame[~frame["symbol"].isin(_FUND_TRACKER_SYMBOLS)] if not frame.empty else frame
+    buy_candidates = _rank_buy_candidates(candidate_frame, lang)
+    high_risk = _rank_high_risk(candidate_frame, lang)
     focus = []
     for item in (*buy_candidates, *high_risk):
         if item["symbol"] not in focus:
@@ -513,6 +550,9 @@ def _quant_candidates(prices: pd.DataFrame, config: AppConfig, lang: str = "en")
         return {}
     latest_date = pd.to_datetime(matured["date"]).max()
     latest = matured[pd.to_datetime(matured["date"]) == latest_date].copy()
+    # Index/sector ETFs are covered by the fund-tracker section; they have no analyst targets
+    # and don't belong in the single-stock research picks.
+    latest = latest[~latest["symbol"].isin(_FUND_TRACKER_SYMBOLS)]
     out: dict[str, Any] = {}
     for profile, spec in RECOMMENDATION_PROFILES.items():
         scored = latest.copy()
@@ -712,7 +752,7 @@ def _collect_symbol_news(
     symbols: list[str], symbol_count: int, per_symbol: int, timeout: int
 ) -> dict[str, list[dict[str, Any]]]:
     try:
-        import yfinance as yf
+        yf = import_yfinance()
     except Exception:  # pragma: no cover - optional dependency
         return {}
     out: dict[str, list[dict[str, Any]]] = {}
@@ -1141,14 +1181,13 @@ _CSS_COMPONENTS = """
 .qa-report .pick-badge.high { color: var(--down); }
 .qa-report .pick-badge.low { color: var(--green); }
 .qa-report .pick-badge.holding { color: var(--orange-deep); border-color: var(--orange-soft); background: var(--orange-soft); }
-.qa-report .bar { height: 5px; border-radius: 3px; background: var(--sand-2); margin: 10px 0 7px; overflow: hidden; }
-.qa-report .bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--orange-deep), var(--orange)); border-radius: 3px; }
 .qa-report .range { margin: 10px 0 7px; }
 .qa-report .range-track { position: relative; height: 6px; border-radius: 3px; background: var(--sand-2); }
-.qa-report .range-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: linear-gradient(90deg, var(--orange-deep), var(--orange)); }
-.qa-report .range-target { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink-soft); }
+.qa-report .range-fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+.qa-report .range-zero { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--ink-soft); }
 .qa-report .range-caption { display: flex; justify-content: space-between; margin-top: 5px; font-family: var(--mono); font-size: 10px; color: var(--faint); }
 .qa-report .range-caption .tgt { color: var(--orange-deep); }
+.qa-report .range-empty { margin: 10px 0 7px; font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
 .qa-report .pick .why { font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
 .qa-report .pick .why.pos { color: var(--green); } .qa-report .pick .why.neg { color: var(--down); }
 
@@ -1433,30 +1472,34 @@ def _html_narrative(report: dict[str, Any], n: _SectionCounter, lang: str = "en"
 
 
 def _pick_range_html(s: dict[str, Any], lang: str) -> str:
-    """Valuation-range bar (low/target/high with the current price marked); falls back to the
-    plain relative-strength bar when no analyst coverage was found for the symbol."""
+    """Deviation-from-target bar: the track center is the analyst target price (0%); the fill
+    grows right/red as price exceeds target, left/green as price sits below it — scaled by how
+    far the analyst low/high sit from the target, so the two edges are "at low" / "at high".
+    No analyst coverage -> a neutral placeholder instead of a bar (no meaningful number to show).
+    """
     valuation = s.get("valuation")
     price = s.get("last_price")
     if not valuation or price is None:
-        strength = int(s.get("strength", 60))
-        return f'<div class="bar"><span style="width:{strength}%"></span></div>'
+        return f'<div class="range-empty">{_esc(tr("No analyst coverage", "暂无机构估值覆盖", lang))}</div>'
     low, target, high = valuation["low"], valuation["target"], valuation["high"]
-    span = high - low
-    price_pct = max(0.0, min(100.0, (price - low) / span * 100))
-    target_pct = max(0.0, min(100.0, (target - low) / span * 100))
-    # Below target = still upside to consensus (green); above target = already past it (red).
-    fill_gradient = (
-        "linear-gradient(90deg, var(--green-deep), var(--green))"
-        if price <= target
-        else "linear-gradient(90deg, var(--down-deep), var(--down))"
-    )
+    deviation_pct = (price - target) / target * 100 if target else 0.0
+    if price <= target:
+        proportion = max(0.0, min(1.0, (target - price) / max(target - low, 1e-9)))
+        fill_style = f"left:{50 - proportion * 50:.1f}%;width:{proportion * 50:.1f}%"
+        fill_gradient = "linear-gradient(90deg, var(--green-deep), var(--green))"
+    else:
+        proportion = max(0.0, min(1.0, (price - target) / max(high - target, 1e-9)))
+        fill_style = f"left:50%;width:{proportion * 50:.1f}%"
+        fill_gradient = "linear-gradient(90deg, var(--down), var(--down-deep))"
+    analyst_count = valuation.get("analyst_count")
+    coverage = f" · {analyst_count}{_esc(tr(' analysts', '家覆盖', lang))}" if analyst_count else ""
     return (
         '<div class="range"><div class="range-track">'
-        f'<span class="range-fill" style="width:{price_pct:.1f}%;background:{fill_gradient}"></span>'
-        f'<span class="range-target" style="left:{target_pct:.1f}%"></span></div>'
+        '<span class="range-zero"></span>'
+        f'<span class="range-fill" style="{fill_style};background:{fill_gradient}"></span></div>'
         '<div class="range-caption">'
         f'<span>{_esc(tr("Low", "低", lang))} ${low:,.0f}</span>'
-        f'<span class="tgt">{_esc(tr("Target", "目标", lang))} ${target:,.0f}</span>'
+        f'<span class="tgt">{_esc(tr("Target", "目标", lang))} ${target:,.0f} ({deviation_pct:+.1f}%){coverage}</span>'
         f'<span>{_esc(tr("High", "高", lang))} ${high:,.0f}</span>'
         "</div></div>"
     )

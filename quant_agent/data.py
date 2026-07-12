@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from quant_agent.config import DataConfig
+from quant_agent.yf_cache import import_yfinance
 
 PRICE_COLUMNS = ["date", "symbol", "open", "high", "low", "close", "adj_close", "volume"]
 SUPPORTED_LOCAL_SUFFIXES = {".csv", ".parquet"}
@@ -300,7 +301,7 @@ def _download_one(yf, symbol: str, config: DataConfig, start: str | None) -> pd.
 def _download_yfinance(
     config: DataConfig, start: str | None, start_by_symbol: dict[str, str] | None = None
 ) -> pd.DataFrame:
-    import yfinance as yf
+    yf = import_yfinance()
 
     starts = start_by_symbol or {}
     today = datetime.now().date().isoformat()

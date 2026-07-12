@@ -24,6 +24,7 @@ from typing import Any
 import pandas as pd
 
 from quant_agent.config import AppConfig, _normalize_universe
+from quant_agent.yf_cache import import_yfinance
 
 PORTFOLIO_VERSION = 1
 _MAX_QUOTE_WORKERS = 8
@@ -160,7 +161,7 @@ def fetch_live_quotes(symbols: list[str]) -> dict[str, float]:
     if not symbols:
         return {}
     try:
-        import yfinance as yf
+        yf = import_yfinance()
     except Exception:
         return {}
 
