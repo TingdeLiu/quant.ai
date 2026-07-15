@@ -676,25 +676,37 @@ def _signed(value: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
+# RSS 源彼此独立且以超时等待为主：并发抓取把整段耗时从「各源之和」压到「最慢一源」。
+_MAX_FEED_WORKERS = 6
+
+
+def _fetch_feed_with_retry(feed: dict[str, str], per_feed: int, timeout: int) -> list[dict[str, Any]] | Exception:
+    """成功返回条目列表；两次尝试都失败时返回最后一个异常（并发 map 下代替 raise）。"""
+    last_error: Exception = RuntimeError("unreachable")
+    for _attempt in range(2):  # one retry to absorb transient network hiccups
+        try:
+            return _fetch_rss(feed["url"], per_feed, timeout)
+        except Exception as exc:  # pragma: no cover - network dependent
+            last_error = exc
+    return last_error
+
+
 def _collect_feeds(
     feeds: list[dict[str, str]], max_items: int, timeout: int
 ) -> tuple[list[dict[str, Any]], list[str]]:
     items: list[dict[str, Any]] = []
     errors: list[str] = []
     per_feed = max(3, max_items // max(len(feeds), 1) + 1)
-    for feed in feeds:
-        entries = None
-        last_error: Exception | None = None
-        for _attempt in range(2):  # one retry to absorb transient network hiccups
-            try:
-                entries = _fetch_rss(feed["url"], per_feed, timeout)
-                break
-            except Exception as exc:  # pragma: no cover - network dependent
-                last_error = exc
-        if entries is None:
-            errors.append(f"feed_failed:{feed.get('name', feed['url'])}: {last_error}")
+    if not feeds:
+        return items, errors
+    workers = max(1, min(_MAX_FEED_WORKERS, len(feeds)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(executor.map(lambda feed: _fetch_feed_with_retry(feed, per_feed, timeout), feeds))
+    for feed, result in zip(feeds, results, strict=True):  # map 保持输入顺序：错误与条目顺序与串行版一致
+        if isinstance(result, Exception):
+            errors.append(f"feed_failed:{feed.get('name', feed['url'])}: {result}")
             continue
-        for entry in entries:
+        for entry in result:
             entry["source"] = feed.get("name", feed["url"])
             items.append(entry)
     # Sort newest first when timestamps are available.
@@ -755,12 +767,22 @@ def _collect_symbol_news(
         yf = import_yfinance()
     except Exception:  # pragma: no cover - optional dependency
         return {}
-    out: dict[str, list[dict[str, Any]]] = {}
-    for symbol in symbols[:symbol_count]:
+    picked = symbols[:symbol_count]
+    if not picked:
+        return {}
+
+    def _fetch_news(symbol: str) -> list[dict[str, Any]]:
         try:
-            raw_news = yf.Ticker(symbol).news or []
+            return yf.Ticker(symbol).news or []
         except Exception:  # pragma: no cover - network dependent
-            continue
+            return []
+
+    # 逐只请求是纯网络 IO，与估值取数同为 yfinance 端点，沿用相同的并发上限。
+    workers = max(1, min(_MAX_TARGET_WORKERS, len(picked)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        raw_by_symbol = list(executor.map(_fetch_news, picked))
+    out: dict[str, list[dict[str, Any]]] = {}
+    for symbol, raw_news in zip(picked, raw_by_symbol, strict=True):  # map 保持输入顺序
         parsed = []
         for entry in raw_news[: per_symbol * 2]:
             item = _parse_yf_news(entry)

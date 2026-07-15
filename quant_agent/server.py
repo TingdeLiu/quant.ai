@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import threading
+import time
 import traceback
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -684,12 +685,29 @@ def _content_type(path: Path) -> str:
     return "application/octet-stream"
 
 
+# 首页、/api/markets-data 和聊天的每条消息都要这份数据，而底层价格库每天至多刷新
+# 一次 —— 逐请求重算（读全库 + 全历史滚动信号）纯属浪费。短 TTL 记忆缓存即可，
+# 失败结果不缓存，保证瞬时故障不会黏住 60 秒。
+_MARKETS_CACHE_TTL_S = 60.0
+_markets_cache: dict[int, tuple[float, AppConfig, dict[str, Any]]] = {}
+_markets_cache_lock = threading.Lock()
+
+
 def _safe_markets_data(config: AppConfig) -> dict[str, Any]:
-    """Build the markets payload, degrading to an empty payload on any failure."""
+    """Build the markets payload (60s memoized), degrading to an empty payload on any failure."""
+    now = time.monotonic()
+    with _markets_cache_lock:
+        hit = _markets_cache.get(id(config))
+        # id 可能被回收复用，须验证确为同一 config 对象。
+        if hit is not None and hit[1] is config and now - hit[0] < _MARKETS_CACHE_TTL_S:
+            return hit[2]
     try:
-        return build_markets_data(config)
+        data = build_markets_data(config)
     except Exception as exc:  # pragma: no cover - data/network dependent
         return {"TICKERS": {}, "WATCH": [], "PRICE": {}, "TFS": [], "defaultSym": None, "error": str(exc)}
+    with _markets_cache_lock:
+        _markets_cache[id(config)] = (now, config, data)
+    return data
 
 
 def _markets_data_script(config: AppConfig) -> str:

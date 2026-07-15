@@ -12,12 +12,23 @@ from quant_agent.config import LLMConfig
 DISALLOWED_REVIEW_TERMS = ["buy order", "sell order", "submit order", "broker order", "market order"]
 
 
-def generate_llm_review(config: LLMConfig, prompt: str) -> tuple[str | None, dict[str, Any]]:
+def _openai_completion(
+    config: LLMConfig,
+    prompt: str,
+    system: str,
+    prompt_version: str,
+    temperature: float,
+    timeout: int,
+) -> tuple[str | None, dict[str, Any]]:
+    """Shared single-turn completion flow: offline by default (``enabled: false``),
+    degrades silently on a missing key or a failed request, and blocks broker/order
+    style output. Both review and narrative generation are this with different
+    system prompts."""
     metadata: dict[str, Any] = {
         "enabled": config.enabled,
         "provider": config.provider,
         "model": config.model,
-        "prompt_version": config.prompt_version,
+        "prompt_version": prompt_version,
         "input_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
     }
     if not config.enabled:
@@ -33,16 +44,10 @@ def generate_llm_review(config: LLMConfig, prompt: str) -> tuple[str | None, dic
     payload = {
         "model": config.model,
         "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a quant research reviewer. Produce research commentary only. "
-                    "Do not provide broker instructions, order tickets, or live trading authorization."
-                ),
-            },
+            {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.2,
+        "temperature": temperature,
     }
     request = urllib.request.Request(
         endpoint,
@@ -51,7 +56,7 @@ def generate_llm_review(config: LLMConfig, prompt: str) -> tuple[str | None, dic
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             body = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         metadata["status"] = "request_failed"
@@ -62,13 +67,26 @@ def generate_llm_review(config: LLMConfig, prompt: str) -> tuple[str | None, dic
     if not text:
         metadata["status"] = "empty_response"
         return None, metadata
-    lowered = text.lower()
-    if any(term in lowered for term in DISALLOWED_REVIEW_TERMS):
+    if any(term in text.lower() for term in DISALLOWED_REVIEW_TERMS):
         metadata["status"] = "blocked_disallowed_review_terms"
         return None, metadata
     metadata["status"] = "ok"
     metadata["output_hash"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
     return text, metadata
+
+
+def generate_llm_review(config: LLMConfig, prompt: str) -> tuple[str | None, dict[str, Any]]:
+    return _openai_completion(
+        config,
+        prompt,
+        system=(
+            "You are a quant research reviewer. Produce research commentary only. "
+            "Do not provide broker instructions, order tickets, or live trading authorization."
+        ),
+        prompt_version=config.prompt_version,
+        temperature=0.2,
+        timeout=30,
+    )
 
 
 def generate_market_narrative(config: LLMConfig, prompt: str) -> tuple[str | None, dict[str, Any]]:
@@ -79,66 +97,21 @@ def generate_market_narrative(config: LLMConfig, prompt: str) -> tuple[str | Non
     output. Used only to turn already-collected news and quant metrics into a
     readable research commentary, never to authorize trades.
     """
-    metadata: dict[str, Any] = {
-        "enabled": config.enabled,
-        "provider": config.provider,
-        "model": config.model,
-        "prompt_version": f"market_narrative::{config.prompt_version}",
-        "input_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-    }
-    if not config.enabled:
-        metadata["status"] = "disabled"
-        return None, metadata
-
-    api_key = os.environ.get(config.api_key_env)
-    if not api_key:
-        metadata["status"] = f"missing_api_key_env:{config.api_key_env}"
-        return None, metadata
-
-    endpoint = config.endpoint or "https://api.openai.com/v1/chat/completions"
-    payload = {
-        "model": config.model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a US equity research analyst. Using ONLY the provided news headlines "
-                    "and quantitative metrics, write a concise daily market research briefing in "
-                    "Chinese. Clearly separate relatively favorable research candidates from elevated-risk "
-                    "names, and always explain the reasoning from the supplied data. Do not invent prices, "
-                    "facts, or sources. This is research commentary only: never provide broker instructions, "
-                    "order tickets, position sizing directives, or live trading authorization."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.3,
-    }
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        method="POST",
+    return _openai_completion(
+        config,
+        prompt,
+        system=(
+            "You are a US equity research analyst. Using ONLY the provided news headlines "
+            "and quantitative metrics, write a concise daily market research briefing in "
+            "Chinese. Clearly separate relatively favorable research candidates from elevated-risk "
+            "names, and always explain the reasoning from the supplied data. Do not invent prices, "
+            "facts, or sources. This is research commentary only: never provide broker instructions, "
+            "order tickets, position sizing directives, or live trading authorization."
+        ),
+        prompt_version=f"market_narrative::{config.prompt_version}",
+        temperature=0.3,
+        timeout=60,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            body = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        metadata["status"] = "request_failed"
-        metadata["error"] = str(exc)
-        return None, metadata
-
-    text = _extract_text(body)
-    if not text:
-        metadata["status"] = "empty_response"
-        return None, metadata
-    lowered = text.lower()
-    if any(term in lowered for term in DISALLOWED_REVIEW_TERMS):
-        metadata["status"] = "blocked_disallowed_review_terms"
-        return None, metadata
-    metadata["status"] = "ok"
-    metadata["output_hash"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    return text, metadata
 
 
 ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"

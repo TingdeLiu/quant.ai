@@ -350,3 +350,75 @@ def test_markets_data_builds_offline(tmp_path: Path) -> None:
     assert len(sample["bull"]) >= 1 and len(sample["bear"]) >= 1
     assert {"1M return", "Ann. vol", "52-wk range", "Signal"}.issubset(sample["stats"].keys())
     assert "investment advice" in sample["summary"].lower()
+
+
+def test_collect_feeds_concurrent_keeps_order_retry_and_errors(monkeypatch) -> None:
+    from quant_agent import market_intel
+
+    calls: list[str] = []
+
+    def fake_fetch(url: str, limit: int, timeout: int) -> list[dict]:
+        calls.append(url)
+        if "bad" in url:
+            raise OSError("connection refused")
+        idx = 1 if "one" in url else 2
+        return [{"title": f"t{idx}", "link": f"https://n/{idx}", "published": "", "summary": "", "published_ts": float(idx)}]
+
+    monkeypatch.setattr(market_intel, "_fetch_rss", fake_fetch)
+    feeds = [
+        {"name": "One", "url": "https://one"},
+        {"name": "Bad", "url": "https://bad"},
+        {"name": "Two", "url": "https://two"},
+    ]
+    items, errors = market_intel._collect_feeds(feeds, max_items=10, timeout=1)
+
+    assert [i["source"] for i in items] == ["Two", "One"]  # newest first by published_ts
+    assert all("published_ts" not in i for i in items)  # internal sort key must not leak
+    assert errors == ["feed_failed:Bad: connection refused"]
+    assert calls.count("https://bad") == 2  # failed feed gets exactly one retry
+
+
+def test_collect_feeds_caps_total_items(monkeypatch) -> None:
+    from quant_agent import market_intel
+
+    def fake_fetch(url: str, limit: int, timeout: int) -> list[dict]:
+        return [
+            {"title": f"{url}-{i}", "link": url, "published": "", "summary": "", "published_ts": float(i)}
+            for i in range(limit)
+        ]
+
+    monkeypatch.setattr(market_intel, "_fetch_rss", fake_fetch)
+    feeds = [{"name": f"F{i}", "url": f"https://f{i}"} for i in range(4)]
+    items, errors = market_intel._collect_feeds(feeds, max_items=5, timeout=1)
+    assert errors == []
+    assert len(items) == 5
+
+
+def test_collect_symbol_news_concurrent_keeps_input_order(monkeypatch) -> None:
+    from quant_agent import market_intel
+
+    class _FakeTicker:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
+        @property
+        def news(self) -> list[dict]:
+            if self.symbol == "BAD":
+                raise ValueError("boom")
+            return [
+                {"title": f"{self.symbol} headline {i}", "link": f"https://n/{self.symbol}/{i}", "publisher": "Wire"}
+                for i in range(5)
+            ]
+
+    class _FakeYF:
+        Ticker = _FakeTicker
+
+    monkeypatch.setattr(market_intel, "import_yfinance", lambda: _FakeYF)
+    out = market_intel._collect_symbol_news(["CCC", "BAD", "AAA"], symbol_count=3, per_symbol=2, timeout=1)
+
+    assert list(out) == ["CCC", "AAA"]  # 输入顺序保留；失败标的静默跳过
+    assert all(len(v) == 2 for v in out.values())  # per_symbol 截断
+    assert out["AAA"][0]["title"] == "AAA headline 0"
+
+    capped = market_intel._collect_symbol_news(["CCC", "AAA", "BBB"], symbol_count=1, per_symbol=2, timeout=1)
+    assert list(capped) == ["CCC"]  # symbol_count 截断
