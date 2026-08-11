@@ -46,6 +46,8 @@ def _write_config(tmp_path: Path) -> str:
                 "  use_llm: false",
                 "  news_feeds: []",
                 "  social_enabled: false",
+                # 个股新闻走 yfinance 网络，不受 news_feeds=[] 约束 —— 置 0 才是真离线。
+                "  symbol_news_count: 0",
                 "  request_timeout: 1",
                 "portfolio:",
                 "  path: pf.json",
@@ -128,6 +130,8 @@ def test_holdings_set_list_remove(tmp_path: Path, monkeypatch) -> None:
 def test_report_tool_returns_artifact_path(tmp_path: Path, monkeypatch) -> None:
     cfg = _write_config(tmp_path)
     monkeypatch.setattr("quant_agent.holdings.fetch_live_quotes", lambda symbols: {})
+    # MCP 工具内部不注入 fetcher，估值走真实 yfinance —— 不挡住测试就会联网等超时。
+    monkeypatch.setattr("quant_agent.market_intel.fetch_analyst_price_targets", lambda symbols: {})
     # 自选 + 持仓都进报告：持仓触发盈亏段，自选并入 universe（AAA 已有价格数据）。
     (tmp_path / "pf.json").write_text(
         json.dumps({"watchlist": ["BBB"], "holdings": [{"symbol": "AAA", "shares": 5, "cost_basis": 90.0}]}),

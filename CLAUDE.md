@@ -21,7 +21,7 @@ quant-ai market-report                             # 每日报告（默认 confi
 
 ## 项目约定
 
-- **测试必须离线**：`data.source=csv` + `tests/_helpers._synthetic_prices()`；`market_intel: {use_llm: false, news_feeds: [], social_enabled: false}`；实时价用注入/monkeypatch（`quant_agent.holdings.fetch_live_quotes`）。无 pytest-asyncio，MCP 工具测试用 `asyncio.run()` 直调。
+- **测试必须离线**，由 `conftest.py` 的 autouse fixture 强制（外部 DNS/connect 一律 OSError，仅放行回环给 dashboard 的本地 HTTP server）。写测试时仍要主动关掉取数，否则只是从"等超时"变成"走降级分支"：`data.source=csv` + `tests/_helpers._synthetic_prices()`；`market_intel: {use_llm: false, news_feeds: [], social_enabled: false, symbol_news_count: 0}`（**个股新闻不受 `news_feeds: []` 约束，必须单独置 0**）；实时价与估值用注入或 monkeypatch（`quant_agent.holdings.fetch_live_quotes`、`quant_agent.market_intel.fetch_analyst_price_targets`）—— MCP 工具内部不注入 fetcher，测它必须 monkeypatch。无 pytest-asyncio，MCP 工具测试用 `asyncio.run()` 直调。
 - **双语**：面向用户的字符串用 `tr(en, zh, lang)`（`i18n.py`），英中并排书写。
 - **报告即 artifact**：生成报告后按 MCP instructions 呈现 —— 有文件访问时直接发布 `artifact_html_path`；否则 `quant_read_report('market_intel_artifact.html')` 取 HTML；最后才用 `report_markdown`。免责声明必须保留。
 - `data/portfolio.json` 只经 `holdings.py` / 两个 MCP 管理工具读写；它是叠加层，`refresh-universe` 重新生成 `my_universe.csv` 不影响它。

@@ -204,8 +204,11 @@ def build_market_report(
     except Exception as exc:  # pragma: no cover - network/data dependent
         report["warnings"].append(f"price_data_unavailable: {exc}")
 
+    # 按标的分组一次，供持仓 sparkline / 基金追踪 / 详情走势图复用。
+    by_symbol = _group_by_symbol(prices)
+
     analysis_symbols: list[str] = []
-    if prices is not None and not prices.empty:
+    if by_symbol:
         report["data_status"] = "ok"
         analysis = _price_analysis(prices, config.strategy.benchmark, lang)
         report["as_of_date"] = analysis["as_of_date"]
@@ -214,7 +217,7 @@ def build_market_report(
         report["high_risk"] = analysis["high_risk"]
         analysis_symbols = analysis["focus_symbols"]
         report["quant_candidates"] = _quant_candidates(prices, config, lang)
-        report["fund_trackers"] = _fund_tracker_snapshot(prices, lang)
+        report["fund_trackers"] = _fund_tracker_snapshot(by_symbol, lang)
 
     # Chat-managed portfolio: holdings snapshot (P&L) + held symbols lead the news focus.
     portfolio: dict[str, Any] = {}
@@ -228,7 +231,7 @@ def build_market_report(
         fetcher = quote_fetcher if quote_fetcher is not None else holdings_store.fetch_live_quotes
         quotes = fetcher(holding_symbols)  # {} on network failure -> last close
         report["holdings"] = holdings_store.build_holdings_snapshot(portfolio, prices, quotes)
-        _attach_holding_sparklines(report["holdings"], prices)
+        _attach_holding_sparklines(report["holdings"], by_symbol)
         focus = list(holding_symbols)
         focus += [symbol for symbol in analysis_symbols if symbol not in focus]
         analysis_symbols = focus[:12]
@@ -237,8 +240,8 @@ def build_market_report(
         _attach_valuation_and_holdings(report, target_fetcher)
 
     # 点开展开的走势详情：报告里出现过的每只标的都配 1W-5Y 的收盘价序列。
-    if prices is not None and not prices.empty:
-        report["detail_charts"] = _build_detail_charts(prices, _detail_chart_symbols(report))
+    if by_symbol:
+        report["detail_charts"] = _build_detail_charts(by_symbol, _detail_chart_symbols(report))
 
     # Market-wide financial media headlines.
     report["news"], news_errors = _collect_feeds(mi.news_feeds, mi.max_news_items, mi.request_timeout)
@@ -269,14 +272,26 @@ def build_market_report(
     return report
 
 
-def _attach_holding_sparklines(holdings: dict[str, Any], prices: pd.DataFrame | None, window: int = 30) -> None:
+def _group_by_symbol(prices: pd.DataFrame | None) -> dict[str, pd.DataFrame]:
+    """Split the long price table into per-symbol, date-sorted frames — once per report.
+
+    多个 section 都要按标的取序列（持仓 sparkline / 基金追踪 / 详情走势图）；各自做
+    ``prices[prices["symbol"] == sym]`` 是一次全表扫描，标的一多就退化成 O(标的数 × 总行数)。
+    ``normalize_prices`` 已按 (symbol, date) 排好序，这里的 sort 只是对未规范化输入的兜底。
+    """
+    if prices is None or prices.empty:
+        return {}
+    return {str(symbol): group.sort_values("date") for symbol, group in prices.groupby("symbol", sort=False)}
+
+
+def _attach_holding_sparklines(holdings: dict[str, Any], by_symbol: dict[str, pd.DataFrame], window: int = 30) -> None:
     """Attach the Chinese display name and a recent-close series (for the sparkline) to each position."""
     for position in holdings.get("positions", []):
         position["name_zh"] = name_zh(position["symbol"])
-        if prices is None or prices.empty:
+        group = by_symbol.get(position["symbol"])
+        if group is None:
             continue
-        group = prices[prices["symbol"] == position["symbol"]]
-        series = group.sort_values("date")["adj_close"].astype(float).tail(window).tolist()
+        series = group["adj_close"].astype(float).tail(window).tolist()
         position["spark"] = [round(v, 4) for v in series]
 
 
@@ -345,7 +360,7 @@ def write_market_report(report: dict[str, Any], output_dir: Path) -> dict[str, P
 
 def _price_analysis(prices: pd.DataFrame, benchmark: str, lang: str = "en") -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
-    as_of = pd.to_datetime(prices["date"]).max()
+    as_of = prices["date"].max()
     for symbol, group in prices.groupby("symbol", sort=False):
         g = group.sort_values("date")
         adj = g["adj_close"].astype(float)
@@ -566,8 +581,9 @@ def _quant_candidates(prices: pd.DataFrame, config: AppConfig, lang: str = "en")
     matured = signals.dropna(subset=["score"])
     if matured.empty:
         return {}
-    latest_date = pd.to_datetime(matured["date"]).max()
-    latest = matured[pd.to_datetime(matured["date"]) == latest_date].copy()
+    # date 列由 normalize_prices 保证已是 datetime64，无需（重复）转换。
+    latest_date = matured["date"].max()
+    latest = matured[matured["date"] == latest_date].copy()
     # Index/sector ETFs are covered by the fund-tracker section; they have no analyst targets
     # and don't belong in the single-stock research picks.
     latest = latest[~latest["symbol"].isin(_FUND_TRACKER_SYMBOLS)]
@@ -647,15 +663,15 @@ def _pct(series: pd.Series, periods: int) -> float | None:
     return round(float(series.iloc[-1]) / prev - 1.0, 4)
 
 
-def _fund_tracker_snapshot(prices: pd.DataFrame, lang: str = "en") -> list[dict[str, Any]]:
+def _fund_tracker_snapshot(by_symbol: dict[str, pd.DataFrame], lang: str = "en") -> list[dict[str, Any]]:
     """Latest price + 1D/5D/1M return for the fixed index/sector ETF watch list."""
     out: list[dict[str, Any]] = []
     for spec in FUND_TRACKERS:
         symbol = spec["symbol"]
-        group = prices[prices["symbol"] == symbol]
-        if group.empty:
+        group = by_symbol.get(symbol)
+        if group is None:
             continue
-        adj = group.sort_values("date")["adj_close"].astype(float)
+        adj = group["adj_close"].astype(float)
         if adj.empty:
             continue
         last_price = round(float(adj.iloc[-1]), 2)
@@ -673,6 +689,11 @@ def _fund_tracker_snapshot(prices: pd.DataFrame, lang: str = "en") -> list[dict[
             }
         )
     return out
+
+
+def _day_str(value: Any) -> str:
+    """价格表里的单个日期值 -> ``YYYY-MM-DD``（normalize_prices 已保证是 datetime，这里兜底字符串输入）。"""
+    return str(pd.Timestamp(value).date())
 
 
 def _downsample(values: list[float], max_points: int = _DETAIL_MAX_POINTS) -> list[float]:
@@ -703,7 +724,7 @@ def _detail_chart_symbols(report: dict[str, Any]) -> list[str]:
     return seen
 
 
-def _build_detail_charts(prices: pd.DataFrame, symbols: list[str]) -> dict[str, Any]:
+def _build_detail_charts(by_symbol: dict[str, pd.DataFrame], symbols: list[str]) -> dict[str, Any]:
     """Per-symbol close series per timeframe window, for the click-to-expand detail charts.
 
     每个窗口按交易日数取尾部日线收盘；某窗口已覆盖全部可用历史时不再生成更长的
@@ -711,26 +732,24 @@ def _build_detail_charts(prices: pd.DataFrame, symbols: list[str]) -> dict[str, 
     """
     out: dict[str, Any] = {}
     for symbol in symbols:
-        group = prices[prices["symbol"] == symbol]
-        if group.empty:
+        group = by_symbol.get(symbol)
+        if group is None:
             continue
-        g = group.sort_values("date")
-        closes = g["adj_close"].astype(float).tolist()
-        dates = [str(d.date()) for d in pd.to_datetime(g["date"])]
+        closes = group["adj_close"].astype(float).tolist()
         if len(closes) < 2:
             continue
+        dates = group["date"]  # 只取每个窗口的首尾两天，不整段转换
         available = len(closes) - 1
         windows: dict[str, Any] = {}
         for label, n in _DETAIL_WINDOWS:
             tail_closes = closes[-(n + 1) :]
-            tail_dates = dates[-(n + 1) :]
             if len(tail_closes) < 2:
                 continue
             first, last = tail_closes[0], tail_closes[-1]
             windows[label] = {
                 "points": [round(v, 4) for v in _downsample(tail_closes)],
-                "start": tail_dates[0],
-                "end": tail_dates[-1],
+                "start": _day_str(dates.iloc[-len(tail_closes)]),
+                "end": _day_str(dates.iloc[-1]),
                 "chg_pct": round((last / first - 1) * 100, 2) if first else None,
                 "low": round(min(tail_closes), 2),
                 "high": round(max(tail_closes), 2),
@@ -1550,7 +1569,9 @@ def _detail_chart_svg(points: list[float], width: int = 640, height: int = 150) 
     step = width / (len(points) - 1)
     pad = 6  # 上下留白，避免曲线贴边
     coords = [(i * step, height - pad - (v - lo) / span * (height - 2 * pad)) for i, v in enumerate(points)]
-    pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    # 坐标取整：点串在文档里出现两次（描边 + 面积填充），是 artifact HTML 的体积大头。
+    # viewBox 仍是 640×150 且约按 1:1 显示，取整误差 ≤0.5px、线宽 1.8px —— 视觉无损。
+    pts = " ".join(f"{round(x)},{round(y)}" for x, y in coords)
     color = "var(--green)" if points[-1] >= points[0] else "var(--down)"
     area = f"0,{height} {pts} {width},{height}"
     return (

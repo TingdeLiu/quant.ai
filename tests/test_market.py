@@ -26,7 +26,14 @@ def _offline_raw(tmp_path: Path) -> dict:
         "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
         "report": {"output_dir": str(tmp_path / "reports")},
         # No network: empty feeds and LLM disabled keep the test fully offline.
-        "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
+        # symbol_news_count=0 关掉个股新闻：它走 yfinance 网络，不受 news_feeds=[] 约束。
+        "market_intel": {
+            "use_llm": False,
+            "news_feeds": [],
+            "social_enabled": False,
+            "symbol_news_count": 0,
+            "request_timeout": 1,
+        },
         "portfolio": {"path": "pf.json"},
     }
 
@@ -78,7 +85,14 @@ def test_market_report_builds_offline(tmp_path: Path) -> None:
         "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
         "report": {"output_dir": str(tmp_path / "reports")},
         # No network: empty feeds and LLM disabled keep the test fully offline.
-        "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
+        # symbol_news_count=0 关掉个股新闻：它走 yfinance 网络，不受 news_feeds=[] 约束。
+        "market_intel": {
+            "use_llm": False,
+            "news_feeds": [],
+            "social_enabled": False,
+            "symbol_news_count": 0,
+            "request_timeout": 1,
+        },
     }
     config = parse_config(raw, base=tmp_path)
     report = build_market_report(config, target_fetcher=lambda symbols: {})  # English by default
@@ -100,7 +114,14 @@ def test_market_report_chinese(tmp_path: Path) -> None:
     raw = {
         "data": {"source": "csv", "csv_path": str(csv_path), "universe": ["AAA", "BBB", "CCC", "SPY"]},
         "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
-        "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
+        # symbol_news_count=0 关掉个股新闻：它走 yfinance 网络，不受 news_feeds=[] 约束。
+        "market_intel": {
+            "use_llm": False,
+            "news_feeds": [],
+            "social_enabled": False,
+            "symbol_news_count": 0,
+            "request_timeout": 1,
+        },
         "language": "zh",
     }
     config = parse_config(raw, base=tmp_path)
@@ -219,7 +240,14 @@ def test_pick_cards_pin_holding_and_show_valuation_range(tmp_path: Path) -> None
     raw = {
         "data": {"source": "csv", "csv_path": str(csv_path), "universe": ["AAA", "BBB", "CCC", "SPY", "MU"]},
         "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
-        "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
+        # symbol_news_count=0 关掉个股新闻：它走 yfinance 网络，不受 news_feeds=[] 约束。
+        "market_intel": {
+            "use_llm": False,
+            "news_feeds": [],
+            "social_enabled": False,
+            "symbol_news_count": 0,
+            "request_timeout": 1,
+        },
         "portfolio": {"path": "pf.json"},
         "language": "zh",
     }
@@ -304,7 +332,14 @@ def test_potential_picks_renamed_and_show_chinese_names(tmp_path: Path) -> None:
     raw = {
         "data": {"source": "csv", "csv_path": str(csv_path), "universe": ["AAA", "BBB", "CCC", "SPY", "MU"]},
         "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
-        "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
+        # symbol_news_count=0 关掉个股新闻：它走 yfinance 网络，不受 news_feeds=[] 约束。
+        "market_intel": {
+            "use_llm": False,
+            "news_feeds": [],
+            "social_enabled": False,
+            "symbol_news_count": 0,
+            "request_timeout": 1,
+        },
         "language": "zh",
     }
     config = parse_config(raw, base=tmp_path)
@@ -444,6 +479,17 @@ def test_detail_charts_windows_and_downsampling(tmp_path: Path) -> None:
         assert w["start"] <= w["end"]
     assert len(windows["1W"]["points"]) == 6  # 5 个交易日 + 起点，不足上限时不采样
 
+    # 窗口边界必须精确落在"尾部 n+1 个交易日"上：起止日期取自原始日期列，
+    # 降采样只影响 points 的个数，不能挪动窗口两端（防 off-by-one 回归）。
+    from quant_agent import market_intel
+
+    dates = pd.bdate_range("2022-01-03", periods=620)  # 与 _offline_raw 的合成价格同一日历
+    last_day = str(dates[-1].date())
+    for label, n in market_intel._DETAIL_WINDOWS:
+        span = min(n + 1, len(dates))
+        assert windows[label]["start"] == str(dates[-span].date()), label
+        assert windows[label]["end"] == last_day, label
+
 
 def test_detail_charts_skip_duplicate_long_windows(tmp_path: Path) -> None:
     csv_path = tmp_path / "prices.csv"
@@ -451,7 +497,14 @@ def test_detail_charts_skip_duplicate_long_windows(tmp_path: Path) -> None:
     raw = {
         "data": {"source": "csv", "csv_path": str(csv_path), "universe": ["AAA", "BBB", "CCC", "SPY"]},
         "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
-        "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
+        # symbol_news_count=0 关掉个股新闻：它走 yfinance 网络，不受 news_feeds=[] 约束。
+        "market_intel": {
+            "use_llm": False,
+            "news_feeds": [],
+            "social_enabled": False,
+            "symbol_news_count": 0,
+            "request_timeout": 1,
+        },
     }
     config = parse_config(raw, base=tmp_path)
     report = build_market_report(config, target_fetcher=lambda symbols: {})

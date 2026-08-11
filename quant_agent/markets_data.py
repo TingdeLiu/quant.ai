@@ -73,8 +73,9 @@ def build_markets_data(config: AppConfig) -> dict[str, Any]:
     if matured.empty:
         return {"TICKERS": {}, "WATCH": [], "PRICE": {}, "TFS": TFS, "defaultSym": None, "lang": lang}
 
-    latest_date = pd.to_datetime(matured["date"]).max()
-    latest = matured[pd.to_datetime(matured["date"]) == latest_date].sort_values("score", ascending=False)
+    # date 列由 normalize_prices 保证已是 datetime64，无需（重复）转换。
+    latest_date = matured["date"].max()
+    latest = matured[matured["date"] == latest_date].sort_values("score", ascending=False)
     series_map = {str(sym): g.sort_values("date") for sym, g in prices.groupby("symbol")}
 
     tickers: dict[str, Any] = {}
