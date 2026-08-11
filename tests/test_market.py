@@ -422,3 +422,62 @@ def test_collect_symbol_news_concurrent_keeps_input_order(monkeypatch) -> None:
 
     capped = market_intel._collect_symbol_news(["CCC", "AAA", "BBB"], symbol_count=1, per_symbol=2, timeout=1)
     assert list(capped) == ["CCC"]  # symbol_count 截断
+
+
+def test_detail_charts_windows_and_downsampling(tmp_path: Path) -> None:
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+
+    charts = report["detail_charts"]
+    assert charts, "expected per-symbol detail chart series"
+    assert "AAA" in charts  # 持仓标的必有走势数据
+    windows = charts["AAA"]
+    # 620 个交易日：1W/1M/6M/1Y 完整，5Y 覆盖全部历史后停止（无更长的重复窗口）
+    assert list(windows) == ["1W", "1M", "6M", "1Y", "5Y"]
+    for w in windows.values():
+        assert len(w["points"]) >= 2
+        assert len(w["points"]) <= 100  # 降采样上限
+        assert w["chg_pct"] is not None
+        assert w["low"] <= w["high"]
+        assert w["start"] <= w["end"]
+    assert len(windows["1W"]["points"]) == 6  # 5 个交易日 + 起点，不足上限时不采样
+
+
+def test_detail_charts_skip_duplicate_long_windows(tmp_path: Path) -> None:
+    csv_path = tmp_path / "prices.csv"
+    _synthetic_prices(periods=100).to_csv(csv_path, index=False)  # 仅 100 天历史
+    raw = {
+        "data": {"source": "csv", "csv_path": str(csv_path), "universe": ["AAA", "BBB", "CCC", "SPY"]},
+        "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
+        "market_intel": {"use_llm": False, "news_feeds": [], "social_enabled": False, "request_timeout": 1},
+    }
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, target_fetcher=lambda symbols: {})
+    for windows in report["detail_charts"].values():
+        # 6M(126) 已覆盖全部 100 天历史 -> 1Y/5Y 不再生成同一条曲线
+        assert list(windows) == ["1W", "1M", "6M"]
+
+
+def test_report_html_has_expandable_detail_panels(tmp_path: Path) -> None:
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+
+    artifact = render_artifact_html(report)
+    # 表格行展开：checkbox 开关 + 隐藏详情行；卡片展开：details/summary。
+    assert 'class="row-toggle"' in artifact
+    assert 'class="detail-row"' in artifact
+    assert '<details class="dp-details">' in artifact
+    # 时间段切换：radio 分组 + tab 标签 + 每窗口一块图面板。
+    assert 'class="dp-radio"' in artifact and 'class="dp-tab"' in artifact
+    assert artifact.count('class="dp-pane"') >= 5
+    assert 'class="dp-svg"' in artifact and "polyline" in artifact
+    # radio 分组名必须全文档唯一（同一标的可出现在多个栏目）。
+    assert 'name="dp-1"' in artifact and 'name="dp-2"' in artifact
+    # 纯 CSS 交互：artifact 片段必须保持零 JS。
+    assert "<script" not in artifact
+    # 整页版同样带详情面板。
+    assert 'class="dp-radio"' in render_html(report)

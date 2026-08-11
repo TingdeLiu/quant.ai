@@ -83,6 +83,19 @@ FUND_TRACKERS: list[dict[str, str]] = [
 # section above — keep them out of the single-stock picks (潜力股/高风险/研究推荐).
 _FUND_TRACKER_SYMBOLS = {spec["symbol"] for spec in FUND_TRACKERS}
 
+# Click-to-expand detail charts: timeframe windows in trading days, from daily closes.
+# 数据库是日线收盘，无盘中数据 —— 最短窗口为 1 周（当日涨跌已在行内展示）。
+_DETAIL_WINDOWS: list[tuple[str, int]] = [("1W", 5), ("1M", 21), ("6M", 126), ("1Y", 252), ("5Y", 1260)]
+_DETAIL_MAX_POINTS = 100  # 每条曲线降采样上限，控制 HTML/JSON 体积
+_DETAIL_DEFAULT_TF = "1M"
+_TF_LABELS: dict[str, tuple[str, str]] = {
+    "1W": ("1W", "近1周"),
+    "1M": ("1M", "近1月"),
+    "6M": ("6M", "近6月"),
+    "1Y": ("1Y", "近1年"),
+    "5Y": ("5Y", "近5年"),
+}
+
 _MAX_TARGET_WORKERS = 5
 _TARGET_RETRY_DELAY_S = 0.6
 
@@ -173,6 +186,7 @@ def build_market_report(
         "buy_candidates": [],
         "high_risk": [],
         "quant_candidates": {},
+        "detail_charts": {},
         "news": [],
         "company_news": {},
         "social": [],
@@ -221,6 +235,10 @@ def build_market_report(
 
     if report["quant_candidates"]:
         _attach_valuation_and_holdings(report, target_fetcher)
+
+    # 点开展开的走势详情：报告里出现过的每只标的都配 1W-5Y 的收盘价序列。
+    if prices is not None and not prices.empty:
+        report["detail_charts"] = _build_detail_charts(prices, _detail_chart_symbols(report))
 
     # Market-wide financial media headlines.
     report["news"], news_errors = _collect_feeds(mi.news_feeds, mi.max_news_items, mi.request_timeout)
@@ -654,6 +672,73 @@ def _fund_tracker_snapshot(prices: pd.DataFrame, lang: str = "en") -> list[dict[
                 "ret_21d_pct": round(r * 100, 2) if (r := _pct(adj, 21)) is not None else None,
             }
         )
+    return out
+
+
+def _downsample(values: list[float], max_points: int = _DETAIL_MAX_POINTS) -> list[float]:
+    """均匀抽样到 ≤max_points 个点（保首尾），供小尺寸 SVG 曲线用。"""
+    if len(values) <= max_points:
+        return values
+    step = (len(values) - 1) / (max_points - 1)
+    return [values[round(i * step)] for i in range(max_points)]
+
+
+def _detail_chart_symbols(report: dict[str, Any]) -> list[str]:
+    """Symbols shown anywhere in the report, in display order (holdings first)."""
+    seen: list[str] = []
+
+    def _add(symbol: str) -> None:
+        if symbol and symbol not in seen:
+            seen.append(symbol)
+
+    for p in (report.get("holdings") or {}).get("positions", []):
+        _add(p["symbol"])
+    for f in report.get("fund_trackers") or []:
+        _add(f["symbol"])
+    for c in [*(report.get("buy_candidates") or []), *(report.get("high_risk") or [])]:
+        _add(c["symbol"])
+    for data in (report.get("quant_candidates") or {}).values():
+        for s in data.get("symbols", []):
+            _add(s["symbol"])
+    return seen
+
+
+def _build_detail_charts(prices: pd.DataFrame, symbols: list[str]) -> dict[str, Any]:
+    """Per-symbol close series per timeframe window, for the click-to-expand detail charts.
+
+    每个窗口按交易日数取尾部日线收盘；某窗口已覆盖全部可用历史时不再生成更长的
+    重复窗口（避免 1Y/5Y 显示同一条曲线）。序列降采样到 ≤_DETAIL_MAX_POINTS 点。
+    """
+    out: dict[str, Any] = {}
+    for symbol in symbols:
+        group = prices[prices["symbol"] == symbol]
+        if group.empty:
+            continue
+        g = group.sort_values("date")
+        closes = g["adj_close"].astype(float).tolist()
+        dates = [str(d.date()) for d in pd.to_datetime(g["date"])]
+        if len(closes) < 2:
+            continue
+        available = len(closes) - 1
+        windows: dict[str, Any] = {}
+        for label, n in _DETAIL_WINDOWS:
+            tail_closes = closes[-(n + 1) :]
+            tail_dates = dates[-(n + 1) :]
+            if len(tail_closes) < 2:
+                continue
+            first, last = tail_closes[0], tail_closes[-1]
+            windows[label] = {
+                "points": [round(v, 4) for v in _downsample(tail_closes)],
+                "start": tail_dates[0],
+                "end": tail_dates[-1],
+                "chg_pct": round((last / first - 1) * 100, 2) if first else None,
+                "low": round(min(tail_closes), 2),
+                "high": round(max(tail_closes), 2),
+            }
+            if n >= available:
+                break  # 该窗口已覆盖全部历史，更长窗口只会重复同一条曲线
+        if windows:
+            out[symbol] = windows
     return out
 
 
@@ -1252,6 +1337,29 @@ _CSS_COMPONENTS = """
 .qa-report .co a { color: var(--ink); text-decoration: none; } .qa-report .co a:hover { color: var(--orange-deep); }
 .qa-report .co .pub { color: var(--faint); font-size: 11px; font-family: var(--mono); }
 
+/* Click-to-expand price detail (pure CSS — the artifact fragment must stay JS-free) */
+.qa-report .sym-toggle { cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.qa-report .sym-toggle::after { content: "▾"; font-size: 9px; color: var(--faint); transition: transform .15s; }
+.qa-report tr:has(.row-toggle:checked) .sym-toggle::after { transform: rotate(180deg); color: var(--orange-deep); }
+.qa-report .row-toggle { display: none; }
+.qa-report tr.detail-row { display: none; }
+.qa-report tr:has(.row-toggle:checked) + tr.detail-row { display: table-row; }
+.qa-report tr.detail-row > td { background: var(--sand); padding: 12px 16px 14px; }
+.qa-report tr.detail-row:hover > td { background: var(--sand); }
+.qa-report .dp-radio { display: none; }
+.qa-report .dp-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.qa-report .dp-tab { font-family: var(--mono); font-size: 10.5px; padding: 3px 10px; border: 1px solid var(--line-2); border-radius: 999px; color: var(--muted); cursor: pointer; background: var(--card); }
+.qa-report .dp-pane { display: none; }
+.qa-report .dp-svg { width: 100%; height: 150px; display: block; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.qa-report .dp-caption { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--muted); flex-wrap: wrap; }
+.qa-report details.dp-details { margin-top: 8px; }
+.qa-report details.dp-details > summary { list-style: none; cursor: pointer; font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+.qa-report details.dp-details > summary::-webkit-details-marker { display: none; }
+.qa-report details.dp-details > summary::after { content: " ▾"; }
+.qa-report details.dp-details[open] > summary::after { content: " ▴"; }
+.qa-report details.dp-details[open] > summary { color: var(--orange-deep); }
+.qa-report details.dp-details > .dp { margin-top: 8px; }
+
 /* Warnings + footer */
 .qa-report .notes { font-size: 12.5px; color: var(--muted); }
 .qa-report .notes li { font-family: var(--mono); }
@@ -1259,6 +1367,14 @@ _CSS_COMPONENTS = """
 .qa-report .empty { color: var(--muted); font-size: 13px; padding: 18px; border: 1px dashed var(--line-2); border-radius: 12px; background: var(--card); }
 @media (max-width: 600px) { .qa-report .news-item { flex-wrap: wrap; } .qa-report .news-item time { margin-left: 0; } .qa-report header { padding-top: 36px; } }
 """
+
+# 详情面板的时间段切换：第 k 个 radio 选中 -> 第 k 个 tab 高亮 + 第 k 个图可见（纯 CSS）。
+_CSS_COMPONENTS += "".join(
+    f".qa-report .dp > .dp-radio:nth-of-type({i}):checked ~ .dp-panes > .dp-pane:nth-of-type({i}) {{ display: block; }}\n"
+    f".qa-report .dp > .dp-radio:nth-of-type({i}):checked ~ .dp-tabs > .dp-tab:nth-of-type({i}) "
+    "{ color: var(--orange-deep); border-color: var(--orange); background: var(--orange-soft); }\n"
+    for i in range(1, len(_DETAIL_WINDOWS) + 1)
+)
 
 
 def _html_masthead(report: dict[str, Any], lang: str) -> str:
@@ -1360,10 +1476,16 @@ def render_artifact_html(report: dict[str, Any]) -> str:
 class _SectionCounter:
     def __init__(self) -> None:
         self.value = 0
+        self._uid = 0
 
     def next(self) -> str:
         self.value += 1
         return f"{self.value:02d}"
+
+    def uid(self) -> str:
+        """文档内唯一 id 片段：同一标的可出现在多个栏目，radio 分组/label 配对不能撞名。"""
+        self._uid += 1
+        return str(self._uid)
 
 
 def _esc(value: Any) -> str:
@@ -1421,6 +1543,73 @@ def _sparkline_svg(values: list[float], width: int = 72, height: int = 24) -> st
     )
 
 
+def _detail_chart_svg(points: list[float], width: int = 640, height: int = 150) -> str:
+    """Inline SVG close-price curve with a soft area fill (self-contained, no chart library)."""
+    lo, hi = min(points), max(points)
+    span = hi - lo or 1.0
+    step = width / (len(points) - 1)
+    pad = 6  # 上下留白，避免曲线贴边
+    coords = [(i * step, height - pad - (v - lo) / span * (height - 2 * pad)) for i, v in enumerate(points)]
+    pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    color = "var(--green)" if points[-1] >= points[0] else "var(--down)"
+    area = f"0,{height} {pts} {width},{height}"
+    return (
+        f'<svg class="dp-svg" viewBox="0 0 {width} {height}" preserveAspectRatio="none" aria-hidden="true">'
+        f'<polygon points="{area}" fill="{color}" opacity="0.08"/>'
+        f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.8" '
+        'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    )
+
+
+def _detail_panel_html(symbol: str, charts: dict[str, Any], uid: str, lang: str) -> str:
+    """Timeframe-tabbed close-price panel（1W-5Y，radio+label 纯 CSS 切换，无 JS）。
+
+    该标的没有序列（价格数据缺失）时返回空串，调用方降级为不可展开。
+    """
+    windows = charts.get(symbol)
+    if not windows:
+        return ""
+    default = _DETAIL_DEFAULT_TF if _DETAIL_DEFAULT_TF in windows else next(iter(windows))
+    inputs: list[str] = []
+    tabs: list[str] = []
+    panes: list[str] = []
+    for idx, (label, w) in enumerate(windows.items(), start=1):
+        input_id = f"dp-{uid}-{idx}"
+        checked = " checked" if label == default else ""
+        inputs.append(f'<input class="dp-radio" type="radio" name="dp-{uid}" id="{input_id}"{checked}>')
+        tabs.append(
+            f'<label class="dp-tab" for="{input_id}">'
+            f"{_esc(tr(*_TF_LABELS.get(label, (label, label)), lang))}</label>"
+        )
+        caption = (
+            f'<span>{_esc(w.get("start", ""))} → {_esc(w.get("end", ""))}</span>'
+            f'<span>{_delta(w.get("chg_pct"))}</span>'
+            f'<span>{_esc(tr("range", "区间", lang))} ${w["low"]:,.2f}–${w["high"]:,.2f}</span>'
+        )
+        panes.append(f'<div class="dp-pane">{_detail_chart_svg(w["points"])}<div class="dp-caption">{caption}</div></div>')
+    return (
+        f'<div class="dp">{"".join(inputs)}'
+        f'<div class="dp-tabs">{"".join(tabs)}</div>'
+        f'<div class="dp-panes">{"".join(panes)}</div></div>'
+    )
+
+
+def _toggle_sym_html(symbol: str, name: str | None, panel: str) -> str:
+    """表格里的代码单元：有详情面板时包一层 label+checkbox 变成展开开关。"""
+    ticker = _ticker_html(symbol, name)
+    if not panel:
+        return ticker
+    return f'<label class="sym-toggle"><input type="checkbox" class="row-toggle">{ticker}</label>'
+
+
+def _detail_details_html(panel: str, lang: str) -> str:
+    """卡片/瓦片里的展开块：<details> 折叠，摘要为“价格走势”。"""
+    if not panel:
+        return ""
+    summary = _esc(tr("Price chart", "价格走势", lang))
+    return f'<details class="dp-details"><summary>{summary}</summary>{panel}</details>'
+
+
 def _html_holdings(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
     holdings = report.get("holdings") or {}
     positions = holdings.get("positions") or []
@@ -1444,18 +1633,24 @@ def _html_holdings(report: dict[str, Any], n: _SectionCounter, lang: str = "en")
         lang,
     ).split("|")
     head = "<tr>" + "".join(f"<th>{_esc(t)}</th>" for t in ths) + "</tr>"
-    rows = "".join(
-        f'<tr><td class="sym">{_ticker_html(p["symbol"], p.get("name_zh"))}</td>'
-        f'<td class="spark-cell">{_sparkline_svg(p.get("spark") or [])}</td>'
-        f'<td class="num">{_esc(_fmt_qty(p["shares"]))}</td>'
-        f'<td class="num">{_money_html(p.get("price"))}</td>'
-        f'<td class="num">{_delta(p.get("day_change_pct"))}</td>'
-        f'<td class="num">{_money_html(p.get("market_value"))}</td>'
-        f'<td class="num muted">{_money_html(p.get("cost_basis"))}</td>'
-        f'<td class="num">{_money_html(p.get("unrealized_pnl"), signed=True, colored=True)}</td>'
-        f'<td class="num">{_delta(p.get("unrealized_pnl_pct"))}</td></tr>'
-        for p in positions
-    )
+    charts = report.get("detail_charts") or {}
+    row_parts: list[str] = []
+    for p in positions:
+        panel = _detail_panel_html(p["symbol"], charts, n.uid(), lang)
+        row_parts.append(
+            f'<tr><td class="sym">{_toggle_sym_html(p["symbol"], p.get("name_zh"), panel)}</td>'
+            f'<td class="spark-cell">{_sparkline_svg(p.get("spark") or [])}</td>'
+            f'<td class="num">{_esc(_fmt_qty(p["shares"]))}</td>'
+            f'<td class="num">{_money_html(p.get("price"))}</td>'
+            f'<td class="num">{_delta(p.get("day_change_pct"))}</td>'
+            f'<td class="num">{_money_html(p.get("market_value"))}</td>'
+            f'<td class="num muted">{_money_html(p.get("cost_basis"))}</td>'
+            f'<td class="num">{_money_html(p.get("unrealized_pnl"), signed=True, colored=True)}</td>'
+            f'<td class="num">{_delta(p.get("unrealized_pnl_pct"))}</td></tr>'
+        )
+        if panel:
+            row_parts.append(f'<tr class="detail-row"><td colspan="{len(ths)}">{panel}</td></tr>')
+    rows = "".join(row_parts)
     section_head = _sec_head(
         n.next(), tr("My holdings", "我的持仓", lang), _quotes_source_label(holdings.get("quotes_source"), lang)
     )
@@ -1546,6 +1741,7 @@ def _html_reco(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> 
     quant = report.get("quant_candidates") or {}
     if not quant:
         return ""
+    charts = report.get("detail_charts") or {}
     columns = []
     for data in quant.values():
         picks = []
@@ -1558,6 +1754,7 @@ def _html_reco(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> 
             ticker_html = _ticker_html(s["symbol"], s.get("name_zh"))
             day_value = s.get("day_change_value")
             why_cls = "pos" if (day_value or 0) > 0 else "neg" if (day_value or 0) < 0 else "flat"
+            panel = _detail_panel_html(s["symbol"], charts, n.uid(), lang)
             picks.append(
                 f'<div class="pick{" is-holding" if s.get("holding") else ""}">'
                 f'<div class="pick-row"><span class="rank">{i:02d}</span>'
@@ -1566,7 +1763,8 @@ def _html_reco(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> 
                 f'<span class="pick-badge {risk}">{_esc(risk_label)}</span>'
                 f'<span class="pick-badge">{_esc(confidence_label)}</span></div>'
                 f"{_pick_range_html(s, lang)}"
-                f'<div class="why {why_cls}">{_esc(s.get("reason", ""))}</div></div>'
+                f'<div class="why {why_cls}">{_esc(s.get("reason", ""))}</div>'
+                f"{_detail_details_html(panel, lang)}</div>"
             )
         if not picks:
             continue
@@ -1585,6 +1783,7 @@ def _html_funds(report: dict[str, Any], n: _SectionCounter, lang: str = "en") ->
     funds = report.get("fund_trackers") or []
     if not funds:
         return ""
+    charts = report.get("detail_charts") or {}
     cards = []
     for f in funds:
         day_pct = f.get("day_change_pct")
@@ -1594,11 +1793,13 @@ def _html_funds(report: dict[str, Any], n: _SectionCounter, lang: str = "en") ->
         else:
             cls = "pos" if day_value > 0 else "neg" if day_value < 0 else "flat"
             day_html = f'<span class="{cls}">{day_value:+.2f} ({day_pct:+.2f}%)</span>'
+        panel = _detail_panel_html(f["symbol"], charts, n.uid(), lang)
         cards.append(
             '<div class="tile fund">'
             f'<div class="t-label">{_esc(f["symbol"])} · {_esc(f["label"])}</div>'
             f'<div class="t-value">${f["last_price"]:,.2f}</div>'
             f'<div class="t-sub">{day_html} · 5D {_delta(f.get("ret_5d_pct"))} · 1M {_delta(f.get("ret_21d_pct"))}</div>'
+            f"{_detail_details_html(panel, lang)}"
             "</div>"
         )
     head = _sec_head(n.next(), tr("Fund & index tracker", "基金/指数追踪", lang), tr("Nasdaq / S&P 500 / semis / AI", "纳指 / 标普500 / 半导体 / AI", lang))
@@ -1609,26 +1810,33 @@ def _html_table(report: dict[str, Any], key: str, title: str, n: _SectionCounter
     rows_data = report.get(key) or []
     if not rows_data:
         return ""
+    charts = report.get("detail_charts") or {}
     if key == "buy_candidates":
         ths = tr("Symbol|Last|1M|5D|Ann. vol|Reason", "代码|最新价|近1月|近5日|年化波动|依据", lang).split("|")
-        head = "<tr>" + "".join(f"<th>{_esc(t)}</th>" for t in ths) + "</tr>"
-        body = "".join(
-            f'<tr><td class="sym">{_ticker_html(c["symbol"], c.get("name_zh"))}</td><td class="num">{c["last_price"]}</td>'
-            f'<td class="num">{_delta(c.get("ret_21d_pct"))}</td><td class="num">{_delta(c.get("ret_5d_pct"))}</td>'
-            f'<td class="num muted">{c.get("vol_annual_pct")}%</td><td class="why-cell">{_esc(c.get("reason", ""))}</td></tr>'
-            for c in rows_data
-        )
         cls, hint = "buy", tr("uptrend · contained vol", "趋势向上 · 波动可控", lang)
     else:
         ths = tr("Symbol|Last|Dist. from high|1M|5D|Reason", "代码|最新价|距52周高点|近1月|近5日|依据", lang).split("|")
-        head = "<tr>" + "".join(f"<th>{_esc(t)}</th>" for t in ths) + "</tr>"
-        body = "".join(
-            f'<tr><td class="sym">{_ticker_html(c["symbol"], c.get("name_zh"))}</td><td class="num">{c["last_price"]}</td>'
-            f'<td class="num">{c.get("dist_from_high_pct")}%</td><td class="num">{_delta(c.get("ret_21d_pct"))}</td>'
-            f'<td class="num">{_delta(c.get("ret_5d_pct"))}</td><td class="why-cell">{_esc(c.get("reason", ""))}</td></tr>'
-            for c in rows_data
-        )
         cls, hint = "risk", tr("near highs · overextended · sharp drop", "近高位 · 涨幅超涨 · 急跌", lang)
+    head = "<tr>" + "".join(f"<th>{_esc(t)}</th>" for t in ths) + "</tr>"
+    body_parts: list[str] = []
+    for c in rows_data:
+        panel = _detail_panel_html(c["symbol"], charts, n.uid(), lang)
+        sym_cell = f'<td class="sym">{_toggle_sym_html(c["symbol"], c.get("name_zh"), panel)}</td>'
+        if key == "buy_candidates":
+            body_parts.append(
+                f'<tr>{sym_cell}<td class="num">{c["last_price"]}</td>'
+                f'<td class="num">{_delta(c.get("ret_21d_pct"))}</td><td class="num">{_delta(c.get("ret_5d_pct"))}</td>'
+                f'<td class="num muted">{c.get("vol_annual_pct")}%</td><td class="why-cell">{_esc(c.get("reason", ""))}</td></tr>'
+            )
+        else:
+            body_parts.append(
+                f'<tr>{sym_cell}<td class="num">{c["last_price"]}</td>'
+                f'<td class="num">{c.get("dist_from_high_pct")}%</td><td class="num">{_delta(c.get("ret_21d_pct"))}</td>'
+                f'<td class="num">{_delta(c.get("ret_5d_pct"))}</td><td class="why-cell">{_esc(c.get("reason", ""))}</td></tr>'
+            )
+        if panel:
+            body_parts.append(f'<tr class="detail-row"><td colspan="{len(ths)}">{panel}</td></tr>')
+    body = "".join(body_parts)
     return (
         f'<section>{_sec_head(n.next(), title, hint)}'
         f'<div class="panel"><table class="{cls}"><thead>{head}</thead><tbody>{body}</tbody></table></div></section>'
