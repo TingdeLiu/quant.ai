@@ -186,6 +186,7 @@ def build_market_report(
         "buy_candidates": [],
         "high_risk": [],
         "quant_candidates": {},
+        "holding_profiles": [],
         "detail_charts": {},
         "news": [],
         "company_news": {},
@@ -208,9 +209,11 @@ def build_market_report(
     by_symbol = _group_by_symbol(prices)
 
     analysis_symbols: list[str] = []
+    analysis_metrics: dict[str, Any] = {}
     if by_symbol:
         report["data_status"] = "ok"
         analysis = _price_analysis(prices, config.strategy.benchmark, lang)
+        analysis_metrics = analysis["metrics_by_symbol"]
         report["as_of_date"] = analysis["as_of_date"]
         report["market_overview"] = analysis["overview"]
         report["buy_candidates"] = analysis["buy_candidates"]
@@ -236,8 +239,15 @@ def build_market_report(
         focus += [symbol for symbol in analysis_symbols if symbol not in focus]
         analysis_symbols = focus[:12]
 
-    if report["quant_candidates"]:
-        _attach_valuation_and_holdings(report, target_fetcher)
+    valuations: dict[str, dict[str, float]] = {}
+    if report["quant_candidates"] or report.get("holdings"):
+        valuations = _attach_valuation_and_holdings(report, target_fetcher)
+
+    # 持仓画像：每只持仓的趋势/风险统计 + 分析师区间 + 量化打分名次（纯事实，不含买卖方向）。
+    if report.get("holdings") and analysis_metrics:
+        report["holding_profiles"] = _build_holding_profiles(
+            report, analysis_metrics, valuations, config.strategy.benchmark
+        )
 
     # 点开展开的走势详情：报告里出现过的每只标的都配 1W-5Y 的收盘价序列。
     if by_symbol:
@@ -261,6 +271,18 @@ def build_market_report(
         report["company_news"] = _collect_symbol_news(
             analysis_symbols, mi.symbol_news_count, mi.max_symbol_news, mi.request_timeout
         )
+
+    # 回填到持仓画像：持仓标的排在 focus 最前，所以这里基本都能命中。
+    # （放在这里是因为 company_news 到这一步才抓完；画像段本身在渲染时才用到它。）
+    company_news = report.get("company_news") or {}
+    for profile in report.get("holding_profiles") or []:
+        profile["news"] = company_news.get(profile["symbol"], [])
+
+    # 手写的持仓资讯归纳（data/news_digest.json，与 portfolio 同目录）—— 不触发任何 LLM 调用。
+    try:
+        _attach_news_digest(report, load_news_digest(config.portfolio_path.parent / "news_digest.json"))
+    except ValueError as exc:
+        report["warnings"].append(f"news_digest_unreadable: {exc}")
 
     # Optional LLM synthesis (offline-safe fallback inside the llm helper).
     if mi.use_llm:
@@ -298,12 +320,14 @@ def _attach_holding_sparklines(holdings: dict[str, Any], by_symbol: dict[str, pd
 def _attach_valuation_and_holdings(
     report: dict[str, Any],
     target_fetcher: Callable[[list[str]], dict[str, dict[str, float]]] | None,
-) -> None:
+) -> dict[str, dict[str, float]]:
     """Attach the analyst valuation range to each pick and pin held symbols to the front.
 
     就地修改 ``report["quant_candidates"]``：每只标的挂上 ``valuation``（估值区间，取不到则
     为 None，卡片降级为"暂无机构估值覆盖"占位文案）和 ``holding``（命中本人持仓时的股数/成本/盈亏）；
     每个持有周期栏目内，命中持仓的标的稳定排到最前（榜首 = 01）。
+
+    返回取到的估值表（symbol -> 区间），持仓画像栏目复用它，避免二次抓取。
     """
     quant = report["quant_candidates"]
     all_symbols: list[str] = []
@@ -311,6 +335,10 @@ def _attach_valuation_and_holdings(
         for s in data.get("symbols", []):
             if s["symbol"] not in all_symbols:
                 all_symbols.append(s["symbol"])
+    # 持仓标的即使没进推荐榜也要取估值 —— 持仓画像栏目要展示它们的分析师区间。
+    for position in report.get("holdings", {}).get("positions", []):
+        if position["symbol"] not in all_symbols:
+            all_symbols.append(position["symbol"])
     fetcher = target_fetcher if target_fetcher is not None else fetch_analyst_price_targets
     valuations = fetcher(all_symbols) if all_symbols else {}
     if all_symbols and not valuations:
@@ -318,8 +346,8 @@ def _attach_valuation_and_holdings(
         # yfinance cookie 缓存），必须在报告里说明，否则满屏“暂无机构估值覆盖”会误导读者。
         report["warnings"].append(
             f"analyst_targets_unavailable: got 0 analyst price targets for all {len(all_symbols)} "
-            "pick symbols — the 'no analyst coverage' placeholders below almost certainly mean the "
-            "fetch failed (network / yfinance cache), not that coverage is actually missing"
+            "pick/holding symbols — the 'no analyst coverage' placeholders below almost certainly mean "
+            "the fetch failed (network / yfinance cache), not that coverage is actually missing"
         )
     holding_positions = {p["symbol"]: p for p in report.get("holdings", {}).get("positions", [])}
 
@@ -338,6 +366,113 @@ def _attach_valuation_and_holdings(
                 else None
             )
         symbols.sort(key=lambda s: 0 if s["holding"] else 1)
+    return valuations
+
+
+def load_news_digest(path: Path) -> dict[str, Any]:
+    """Load the hand-written per-holding news digest (``data/news_digest.json``).
+
+    这份归纳由助手在对话里写好后存盘，报告只负责呈现 —— 项目本身不为此调用任何 LLM API。
+    结构：``{"as_of": "YYYY-MM-DD", "digests": {"WDC": "一句话", ...}}``。
+    文件不存在是正常情况（返回空）；存在但解析不了则报错，避免把损坏内容当"没有归纳"静默略过。
+    """
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"Invalid news digest file {path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"Invalid news digest file {path}: top-level JSON must be an object")
+    digests = raw.get("digests")
+    if digests is not None and not isinstance(digests, dict):
+        raise ValueError(f"Invalid news digest file {path}: 'digests' must be an object")
+    return {
+        "as_of": str(raw.get("as_of") or ""),
+        "digests": {str(k).strip().upper(): str(v) for k, v in (digests or {}).items() if str(v).strip()},
+    }
+
+
+def _attach_news_digest(report: dict[str, Any], digest: dict[str, Any]) -> None:
+    """把手写归纳挂到持仓画像上，并记录它的日期（与报告不同日时渲染层会标注）。"""
+    digests = digest.get("digests") or {}
+    if not digests:
+        return
+    as_of = digest.get("as_of") or ""
+    stale = bool(as_of) and as_of != report.get("as_of_date")
+    for profile in report.get("holding_profiles") or []:
+        if text := digests.get(profile["symbol"]):
+            profile["news_digest"] = text
+            profile["news_digest_as_of"] = as_of
+            profile["news_digest_stale"] = stale
+
+
+def _build_holding_profiles(
+    report: dict[str, Any],
+    metrics: dict[str, Any],
+    valuations: dict[str, dict[str, float]],
+    benchmark: str,
+) -> list[dict[str, Any]]:
+    """Per-holding factual snapshot: trend, returns, risk stats, analyst range, quant standing.
+
+    只汇总客观统计与第三方一致预期，**不产生任何买卖方向或目标价预测** —— 报告的定位是
+    把判断材料摆齐，决策留给读者（见 disclaimer）。数据全部复用已算好的结果，不额外取数。
+    """
+    positions = report.get("holdings", {}).get("positions") or []
+    if not positions:
+        return []
+    bench = metrics.get(benchmark.upper()) or {}
+    bench_21d = bench.get("ret_21d")
+
+    # 该标的在各持有周期榜单里的名次（1-based），用于说明量化打分怎么看它。
+    standing: dict[str, list[dict[str, Any]]] = {}
+    for data in (report.get("quant_candidates") or {}).values():
+        for rank, s in enumerate(data.get("symbols", []), start=1):
+            standing.setdefault(s["symbol"], []).append(
+                {"label": data.get("label_zh") or data.get("label"), "rank": rank, "score": s.get("score")}
+            )
+
+    out: list[dict[str, Any]] = []
+    for position in positions:
+        symbol = position["symbol"]
+        m = metrics.get(symbol)
+        if not m:
+            continue
+        ret_21d = m.get("ret_21d")
+        out.append(
+            {
+                "symbol": symbol,
+                "name_zh": position.get("name_zh"),
+                "last_price": m.get("last_price"),
+                "weight_pct": None,  # 由下面统一按市值占比回填
+                "trend_up": m.get("trend_up"),
+                "ret_5d_pct": _as_pct(m.get("ret_5d")),
+                "ret_21d_pct": _as_pct(ret_21d),
+                "ret_63d_pct": _as_pct(m.get("ret_63d")),
+                "vol_annual_pct": _as_pct(m.get("vol_annual")),
+                "max_drawdown_252_pct": _as_pct(m.get("max_drawdown_252")),
+                "dist_from_high_pct": _as_pct(m.get("dist_from_high")),
+                "vs_benchmark_21d_pct": (
+                    round((ret_21d - bench_21d) * 100, 2) if ret_21d is not None and bench_21d is not None else None
+                ),
+                "valuation": valuations.get(symbol),
+                "quant_standing": standing.get(symbol, []),
+            }
+        )
+
+    total_mv = report.get("holdings", {}).get("totals", {}).get("market_value")
+    if total_mv:
+        by_symbol = {p["symbol"]: p for p in positions}
+        for profile in out:
+            mv = by_symbol[profile["symbol"]].get("market_value")
+            if mv is not None:
+                profile["weight_pct"] = round(mv / total_mv * 100, 1)
+    return out
+
+
+def _as_pct(value: float | None) -> float | None:
+    """比率 -> 百分比（两位小数）；None 透传。"""
+    return round(value * 100, 2) if value is not None else None
 
 
 def write_market_report(report: dict[str, Any], output_dir: Path) -> dict[str, Path]:
@@ -412,6 +547,8 @@ def _price_analysis(prices: pd.DataFrame, benchmark: str, lang: str = "en") -> d
         "buy_candidates": buy_candidates,
         "high_risk": high_risk,
         "focus_symbols": focus[:12],
+        # 每只标的的完整指标（持仓画像栏目要用；上面的榜单只保留了入选的那些）。
+        "metrics_by_symbol": {r["symbol"]: r for r in rows},
     }
 
 
@@ -1028,6 +1165,92 @@ def _quotes_source_label(source: str | None, lang: str) -> str:
     return labels.get(source or "", labels["last_close"])
 
 
+def _profile_note(profile: dict[str, Any], lang: str) -> str:
+    """把画像里的统计翻译成中性描述短语 —— 只陈述状态，不给方向。"""
+    bits: list[str] = []
+    bits.append(tr("trend up", "趋势向上", lang) if profile.get("trend_up") else tr("trend down", "趋势向下", lang))
+    vol = profile.get("vol_annual_pct")
+    if vol is not None:
+        level = (
+            tr("high vol", "高波动", lang)
+            if vol >= 60
+            else tr("moderate vol", "中等波动", lang)
+            if vol >= 30
+            else tr("low vol", "低波动", lang)
+        )
+        bits.append(f"{level} {vol:.0f}%")
+    dist = profile.get("dist_from_high_pct")
+    if dist is not None:
+        bits.append(tr(f"{dist:.0f}% from 52w high", f"距52周高点 {dist:.0f}%", lang))
+    rel = profile.get("vs_benchmark_21d_pct")
+    if rel is not None:
+        word = tr("ahead of", "跑赢", lang) if rel >= 0 else tr("behind", "跑输", lang)
+        bits.append(tr(f"1M {word} benchmark {abs(rel):.1f}pp", f"近1月{word}基准 {abs(rel):.1f}pp", lang))
+    return " · ".join(bits)
+
+
+def _markdown_holding_profiles(report: dict[str, Any], lang: str) -> list[str]:
+    profiles = report.get("holding_profiles") or []
+    if not profiles:
+        return []
+    lines = [f"## {tr('Holdings at a glance', '持仓标的画像', lang)}"]
+    lines.append(
+        tr(
+            "_Factual statistics and third-party analyst consensus only — no buy/sell direction, "
+            "no price forecast. See the disclaimer._",
+            "_仅为客观统计与第三方分析师一致预期，**不含买卖方向、不含价格预测**。见免责声明。_",
+            lang,
+        )
+    )
+    lines.append("")
+    header = tr(
+        "Symbol|Weight|Last|5D|1M|3M|Ann. vol|Max DD (1y)|From 52w high|vs Benchmark (1M)|Analyst range|Quant standing",
+        "代码|仓位占比|最新价|近5日|近1月|近3月|年化波动|近一年最大回撤|距52周高点|近1月相对基准|分析师区间|量化榜单名次",
+        lang,
+    ).split("|")
+    lines.append("| " + " | ".join(header) + " |")
+    lines.append("| " + " | ".join("---" for _ in header) + " |")
+    for p in profiles:
+        val = p.get("valuation")
+        val_text = (
+            f"${val['low']:,.0f}–${val['target']:,.0f}–${val['high']:,.0f}（{val.get('analyst_count', 0)}）"
+            if val
+            else tr("no coverage", "暂无覆盖", lang)
+        )
+        standing = p.get("quant_standing") or []
+        stand_text = "、".join(f"{s['label']}#{s['rank']}" for s in standing) if standing else "—"
+        weight = f"{p['weight_pct']:.1f}%" if p.get("weight_pct") is not None else "—"
+        lines.append(
+            f"| {p['symbol']}{(' ' + p['name_zh']) if p.get('name_zh') else ''} | {weight} | "
+            f"{_fmt_money(p.get('last_price'))} | {_fmt_pct_signed(p.get('ret_5d_pct'))} | "
+            f"{_fmt_pct_signed(p.get('ret_21d_pct'))} | {_fmt_pct_signed(p.get('ret_63d_pct'))} | "
+            f"{p.get('vol_annual_pct')}% | {p.get('max_drawdown_252_pct')}% | {p.get('dist_from_high_pct')}% | "
+            f"{_fmt_pct_signed(p.get('vs_benchmark_21d_pct'))}pp | {val_text} | {stand_text} |"
+        )
+    lines.append("")
+    # 每只持仓的近期资讯：手写归纳（如有）+ 出处标题。
+    if any(p.get("news") or p.get("news_digest") for p in profiles):
+        lines.append(f"### {tr('Recent news per holding', '持仓近期资讯', lang)}")
+        for p in profiles:
+            items = p.get("news") or []
+            digest = p.get("news_digest")
+            if not items and not digest:
+                continue
+            lines.append(f"- **{p['symbol']}**")
+            if digest:
+                stale = (
+                    f"（{tr('digest as of', '归纳截至', lang)} {p['news_digest_as_of']}）"
+                    if p.get("news_digest_stale") and p.get("news_digest_as_of")
+                    else ""
+                )
+                lines.append(f"  - {digest}{stale}")
+            for item in items:
+                publisher = f" （{item['publisher']}）" if item.get("publisher") else ""
+                lines.append(f"  - {item.get('title', '')}{publisher} {item.get('link', '')}")
+        lines.append("")
+    return lines
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     lang = normalize_language(report.get("language", "en"))
     na = tr("unavailable", "不可用", lang)
@@ -1069,6 +1292,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"{_fmt_pct_signed(totals.get('unrealized_pnl_pct'))} |"
         )
         lines.append("")
+
+    lines.extend(_markdown_holding_profiles(report, lang))
 
     overview = report.get("market_overview") or {}
     if overview:
@@ -1356,6 +1581,26 @@ _CSS_COMPONENTS = """
 .qa-report .co a { color: var(--ink); text-decoration: none; } .qa-report .co a:hover { color: var(--orange-deep); }
 .qa-report .co .pub { color: var(--faint); font-size: 11px; font-family: var(--mono); }
 
+/* Holdings at a glance — per-holding factual cards */
+.qa-report .hp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.qa-report .hp-card { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--card); }
+.qa-report .hp-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.qa-report .hp-weight { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.qa-report .hp-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px 10px; margin-bottom: 10px; }
+.qa-report .hp-stat { display: flex; flex-direction: column; gap: 1px; }
+.qa-report .hp-k { font-size: 10px; color: var(--faint); text-transform: uppercase; letter-spacing: .04em; }
+.qa-report .hp-v { font-family: var(--mono); font-size: 12.5px; }
+.qa-report .hp-standing { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.qa-report .hp-none { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+.qa-report .hp-news { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
+.qa-report .hp-news ul { list-style: none; margin: 5px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.qa-report .hp-news li { font-size: 12px; line-height: 1.45; }
+.qa-report .hp-news a { color: var(--ink-soft); text-decoration: none; }
+.qa-report .hp-news a:hover { color: var(--orange-deep); }
+.qa-report .hp-news .pub { margin-left: 6px; color: var(--faint); font-size: 10.5px; font-family: var(--mono); }
+.qa-report .hp-digest { margin: 6px 0 2px; font-size: 12.5px; line-height: 1.55; color: var(--ink-soft); }
+.qa-report .hp-stale { margin-left: 6px; font-family: var(--mono); font-size: 10px; color: var(--orange-deep); white-space: nowrap; }
+
 /* Click-to-expand price detail (pure CSS — the artifact fragment must stay JS-free) */
 .qa-report .sym-toggle { cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .qa-report .sym-toggle::after { content: "▾"; font-size: 9px; color: var(--faint); transition: transform .15s; }
@@ -1427,6 +1672,7 @@ def _html_sections(report: dict[str, Any], lang: str) -> str:
     n = _SectionCounter()
     body = [
         _html_holdings(report, n, lang),  # 用户最关心自己的钱：持仓永远排最前
+        _html_holding_profiles(report, n, lang),  # 紧跟持仓：每只票的判断材料
         _html_overview(report, n, lang),
         _html_funds(report, n, lang),
         _html_narrative(report, n, lang),
@@ -1707,6 +1953,95 @@ def _html_narrative(report: dict[str, Any], n: _SectionCounter, lang: str = "en"
     if not narrative:
         return ""
     return f'<section>{_sec_head(n.next(), tr("AI synthesis", "AI 综合分析", lang), "model synthesis")}<div class="narrative">{_esc(narrative)}</div></section>'
+
+
+def _hp_news_html(profile: dict[str, Any], lang: str) -> str:
+    """该持仓的近期资讯：有手写归纳就先给结论句，下面照旧列出处标题（结论可回溯）。"""
+    items = profile.get("news") or []
+    digest = profile.get("news_digest")
+    if not items and not digest:
+        return f'<div class="hp-news hp-none">{_esc(tr("no recent headlines", "近期无相关资讯", lang))}</div>'
+    label = f'<span class="hp-k">{_esc(tr("Recent news", "近期资讯", lang))}</span>'
+    digest_html = ""
+    if digest:
+        stamp = ""
+        if profile.get("news_digest_stale") and profile.get("news_digest_as_of"):
+            as_of = profile["news_digest_as_of"]
+            stamp = (
+                f'<span class="hp-stale">'
+                f'{_esc(tr(f"digest as of {as_of}", f"归纳截至 {as_of}", lang))}</span>'
+            )
+        digest_html = f'<p class="hp-digest">{_esc(digest)}{stamp}</p>'
+    if not items:
+        return f'<div class="hp-news">{label}{digest_html}</div>'
+    lis = "".join(
+        f'<li><a href="{_esc(item.get("link", ""))}" target="_blank" rel="noopener">'
+        f'{_esc(item.get("title", ""))}</a>'
+        f'<span class="pub">{_esc(item.get("publisher", ""))}</span></li>'
+        for item in items
+    )
+    return f'<div class="hp-news">{label}{digest_html}<ul>{lis}</ul></div>'
+
+
+def _html_holding_profiles(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
+    """Per-holding factual card: trend/return/risk stats, analyst range, quant standing.
+
+    刻意不给方向性结论 —— 这一段的作用是把判断材料摆齐，买卖决策由读者自己做。
+    """
+    profiles = report.get("holding_profiles") or []
+    if not profiles:
+        return ""
+    charts = report.get("detail_charts") or {}
+    cards = []
+    for p in profiles:
+        trend_cls = "pos" if p.get("trend_up") else "neg"
+        trend_text = tr("Trend up", "趋势向上", lang) if p.get("trend_up") else tr("Trend down", "趋势向下", lang)
+        weight = f"{p['weight_pct']:.1f}%" if p.get("weight_pct") is not None else "—"
+        stats = [
+            (tr("5D", "近5日", lang), _delta(p.get("ret_5d_pct"))),
+            (tr("1M", "近1月", lang), _delta(p.get("ret_21d_pct"))),
+            (tr("3M", "近3月", lang), _delta(p.get("ret_63d_pct"))),
+            (tr("Ann. vol", "年化波动", lang), f'<span class="muted">{p.get("vol_annual_pct")}%</span>'),
+            (tr("Max DD 1y", "近一年回撤", lang), f'<span class="neg">{p.get("max_drawdown_252_pct")}%</span>'),
+            (tr("From 52w high", "距52周高点", lang), f'<span class="muted">{p.get("dist_from_high_pct")}%</span>'),
+        ]
+        rel = p.get("vs_benchmark_21d_pct")
+        if rel is not None:
+            label = tr("vs benchmark 1M", "近1月相对基准", lang)
+            stats.append((label, f'<span class="{"pos" if rel >= 0 else "neg"}">{rel:+.2f}pp</span>'))
+        stat_html = "".join(
+            f'<div class="hp-stat"><span class="hp-k">{_esc(k)}</span><span class="hp-v">{v}</span></div>'
+            for k, v in stats
+        )
+        standing = p.get("quant_standing") or []
+        stand_html = (
+            "".join(
+                f'<span class="pick-badge">{_esc(s["label"])} #{s["rank"]}</span>'
+                for s in standing
+            )
+            if standing
+            else f'<span class="hp-none">{_esc(tr("not in any quant list", "未进任何量化榜单", lang))}</span>'
+        )
+        panel = _detail_panel_html(p["symbol"], charts, n.uid(), lang)
+        cards.append(
+            '<div class="hp-card">'
+            f'<div class="hp-head">{_ticker_html(p["symbol"], p.get("name_zh"))}'
+            f'<span class="hp-weight">{_esc(tr("weight", "仓位", lang))} {weight}</span>'
+            f'<span class="pick-badge {trend_cls}">{_esc(trend_text)}</span></div>'
+            f'<div class="hp-stats">{stat_html}</div>'
+            f"{_pick_range_html(p, lang)}"
+            f'<div class="hp-standing">{stand_html}</div>'
+            f"{_hp_news_html(p, lang)}"
+            f"{_detail_details_html(panel, lang)}"
+            "</div>"
+        )
+    hint = tr(
+        "facts only · no buy/sell call",
+        "只摆事实 · 不给买卖方向",
+        lang,
+    )
+    head = _sec_head(n.next(), tr("Holdings at a glance", "持仓标的画像", lang), hint)
+    return f'<section>{head}<div class="hp-grid">{"".join(cards)}</div></section>'
 
 
 def _pick_range_html(s: dict[str, Any], lang: str) -> str:

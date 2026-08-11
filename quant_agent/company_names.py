@@ -38,6 +38,7 @@ COMPANY_NAMES_ZH: dict[str, str] = {
     "INTC": "英特尔",
     "TXN": "德州仪器",
     "MU": "美光科技",
+    "WDC": "西部数据",
     "AMAT": "应用材料",
     "LRCX": "泛林集团",
     "KLAC": "科磊",
@@ -68,6 +69,8 @@ COMPANY_NAMES_ZH: dict[str, str] = {
     "CVS": "CVS Health",
     "C": "花旗集团",
     "VLO": "瓦莱罗能源",
+    # 无通用中文译名，沿用表内惯例保留原名（同 Snowflake / Datadog / CrowdStrike）。
+    "RCAT": "Red Cat",
     "QQQ": "纳斯达克100ETF",
     "SMH": "半导体ETF",
     "AIQ": "人工智能ETF",

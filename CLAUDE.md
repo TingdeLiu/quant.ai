@@ -24,4 +24,6 @@ quant-ai market-report                             # 每日报告（默认 confi
 - **测试必须离线**，由 `conftest.py` 的 autouse fixture 强制（外部 DNS/connect 一律 OSError，仅放行回环给 dashboard 的本地 HTTP server）。写测试时仍要主动关掉取数，否则只是从"等超时"变成"走降级分支"：`data.source=csv` + `tests/_helpers._synthetic_prices()`；`market_intel: {use_llm: false, news_feeds: [], social_enabled: false, symbol_news_count: 0}`（**个股新闻不受 `news_feeds: []` 约束，必须单独置 0**）；实时价与估值用注入或 monkeypatch（`quant_agent.holdings.fetch_live_quotes`、`quant_agent.market_intel.fetch_analyst_price_targets`）—— MCP 工具内部不注入 fetcher，测它必须 monkeypatch。无 pytest-asyncio，MCP 工具测试用 `asyncio.run()` 直调。
 - **双语**：面向用户的字符串用 `tr(en, zh, lang)`（`i18n.py`），英中并排书写。
 - **报告即 artifact**：生成报告后按 MCP instructions 呈现 —— 有文件访问时直接发布 `artifact_html_path`；否则 `quant_read_report('market_intel_artifact.html')` 取 HTML；最后才用 `report_markdown`。免责声明必须保留。
+- **持仓画像段不给方向**：`holding_profiles` 只摆客观统计与第三方一致预期，**不含买卖建议、不含价格预测**（有测试盯着措辞）。用户要买卖建议时说明这是持牌顾问的事，改代码也不解除；能给的是情景分析、集中度量化、回测他自己的规则。
+- **持仓资讯归纳是手写的**：助手把总结写进 `data/news_digest.json`（`{as_of, digests:{SYMBOL: 一句话}}`，与 portfolio 同目录、已 gitignore），报告读取渲染 —— **项目不为此调用任何 LLM API**。`as_of` 与报告数据日不一致时，卡片自动标「归纳截至 X」，旧归纳不会假装成当天的。每次更新报告都要一并重写这份文件。
 - `data/portfolio.json` 只经 `holdings.py` / 两个 MCP 管理工具读写；它是叠加层，`refresh-universe` 重新生成 `my_universe.csv` 不影响它。

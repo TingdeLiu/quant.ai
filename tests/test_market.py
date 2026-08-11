@@ -191,9 +191,11 @@ def test_holdings_section_first_in_html(tmp_path: Path) -> None:
     artifact = render_artifact_html(report)
     for rendered in (html, artifact):
         assert rendered.index("My holdings") < rendered.index("Market overview")
-    # 持仓段占用 01 号，概览顺延为 02。
+    # 持仓段占 01，持仓画像紧随其后占 02，概览顺延为 03。
     assert '<span class="sec-num">01</span><h2>My holdings</h2>' in artifact
-    assert '<span class="sec-num">02</span><h2>Market overview</h2>' in artifact
+    assert '<span class="sec-num">02</span><h2>Holdings at a glance</h2>' in artifact
+    assert '<span class="sec-num">03</span><h2>Market overview</h2>' in artifact
+    assert artifact.index("Holdings at a glance") < artifact.index("Market overview")
 
 
 def test_render_artifact_html_self_contained(tmp_path: Path) -> None:
@@ -323,6 +325,152 @@ def test_high_risk_section_flags_near_high(tmp_path: Path) -> None:
     for item in report["high_risk"]:
         assert "dist_from_high_pct" in item and "ret_21d_pct" in item
         assert "name_zh" in item
+
+
+def test_holding_profiles_carry_stats_and_quant_standing(tmp_path: Path) -> None:
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    targets = {"AAA": {"low": 80.0, "target": 120.0, "high": 160.0, "analyst_count": 7}}
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: targets)
+
+    profiles = {p["symbol"]: p for p in report["holding_profiles"]}
+    assert set(profiles) == {"AAA", "CCC"}  # 与 _write_portfolio 的持仓一致
+    aaa = profiles["AAA"]
+    for key in ("ret_5d_pct", "ret_21d_pct", "ret_63d_pct", "vol_annual_pct", "max_drawdown_252_pct"):
+        assert aaa[key] is not None, key
+    assert aaa["trend_up"] is True  # AAA 是上行的合成序列
+    assert aaa["valuation"] == targets["AAA"]  # 持仓即使没进榜单也要取到估值
+    assert aaa["vs_benchmark_21d_pct"] is not None  # 相对 SPY 的强弱
+    # 仓位占比之和 ≈ 100%（浮点与四舍五入留一点余量）
+    assert abs(sum(p["weight_pct"] for p in profiles.values()) - 100.0) < 0.5
+    # 上了量化榜的持仓要带名次，字段本身对所有持仓都存在
+    assert all(isinstance(p["quant_standing"], list) for p in profiles.values())
+
+
+def test_holding_profiles_backfill_company_news(tmp_path: Path, monkeypatch) -> None:
+    """画像先构建、个股资讯后抓取，二者靠一步回填衔接 —— 断了不会报错，只会静默少一块。"""
+    from quant_agent import market_intel
+
+    monkeypatch.setattr(
+        market_intel,
+        "_collect_symbol_news",
+        lambda symbols, symbol_count, per_symbol, timeout: {
+            "AAA": [{"title": "AAA headline", "link": "https://x/1", "publisher": "Wire"}]
+        },
+    )
+    raw = _offline_raw(tmp_path)
+    raw["market_intel"]["symbol_news_count"] = 3  # 打开个股资讯（已被 monkeypatch 挡在网络之外）
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+
+    profiles = {p["symbol"]: p for p in report["holding_profiles"]}
+    assert profiles["AAA"]["news"] and profiles["AAA"]["news"][0]["title"] == "AAA headline"
+    assert profiles["CCC"]["news"] == []  # 没有资讯的持仓拿到空列表，不是缺字段
+
+    artifact = render_artifact_html(report)
+    section = artifact[artifact.index("Holdings at a glance") : artifact.index("Market overview")]
+    assert "AAA headline" in section and "https://x/1" in section
+    assert "no recent headlines" in section  # CCC 的占位
+
+
+def _write_digest(tmp_path: Path, as_of: str, digests: dict) -> None:
+    (tmp_path / "news_digest.json").write_text(
+        json.dumps({"as_of": as_of, "digests": digests}, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def test_handwritten_news_digest_renders_on_cards(tmp_path: Path) -> None:
+    """手写归纳直接进报告 —— 项目不为此调任何 LLM API。"""
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+    _write_digest(tmp_path, report["as_of_date"], {"AAA": "存储板块承压，公司股价回落。", "ZZZ": "无关标的"})
+
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+    profiles = {p["symbol"]: p for p in report["holding_profiles"]}
+    assert profiles["AAA"]["news_digest"] == "存储板块承压，公司股价回落。"
+    assert profiles["AAA"]["news_digest_stale"] is False  # 与报告同日
+    assert "news_digest" not in profiles["CCC"]  # 没写归纳的持仓不受影响
+
+    artifact = render_artifact_html(report)
+    section = artifact[artifact.index("Holdings at a glance") : artifact.index("Market overview")]
+    assert "存储板块承压，公司股价回落。" in section
+    assert "归纳截至" not in section  # 同日不标时间戳
+    assert "存储板块承压" in render_markdown(report)
+
+
+def test_stale_news_digest_is_labelled_not_hidden(tmp_path: Path) -> None:
+    """归纳日期与报告数据日不一致时必须标出来 —— 静默展示旧归纳会误导读者。"""
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    _write_digest(tmp_path, "2024-01-01", {"AAA": "旧的归纳内容。"})
+
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+    profile = next(p for p in report["holding_profiles"] if p["symbol"] == "AAA")
+    assert profile["news_digest_stale"] is True
+    artifact = render_artifact_html(report)
+    assert "旧的归纳内容。" in artifact and "2024-01-01" in artifact
+
+
+def test_corrupt_news_digest_warns_instead_of_silently_skipping(tmp_path: Path) -> None:
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    (tmp_path / "news_digest.json").write_text("{ not json", encoding="utf-8")
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+    assert any("news_digest_unreadable" in w for w in report["warnings"])
+    assert report["holding_profiles"]  # 画像本身照常生成
+
+
+def test_holding_profiles_render_without_directional_advice(tmp_path: Path) -> None:
+    """画像栏目只摆事实：不得出现买入/卖出/加仓/减仓一类的方向性措辞。
+
+    这是该栏目存在的前提（研究工具不做个性化投资建议），措辞回归会让整个报告的定位失守。
+    """
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+
+    artifact = render_artifact_html(report)
+    assert 'class="hp-card"' in artifact
+    assert "Holdings at a glance" in artifact
+    section = artifact[artifact.index("Holdings at a glance") : artifact.index("Market overview")]
+    for banned in ("建议买入", "建议卖出", "加仓", "减仓", "buy now", "sell now", "should buy", "should sell"):
+        assert banned not in section, banned
+    assert "no buy/sell call" in section  # 免责措辞就在段头
+
+    # 中文版同样成立
+    zh_report = build_market_report(
+        parse_config({**raw, "language": "zh"}, base=tmp_path),
+        quote_fetcher=lambda symbols: {},
+        target_fetcher=lambda symbols: {},
+    )
+    zh = render_artifact_html(zh_report)
+    assert "持仓标的画像" in zh and "只摆事实 · 不给买卖方向" in zh
+    assert "持仓标的画像" in render_markdown(zh_report)
+
+
+def test_default_universe_symbols_all_have_display_names() -> None:
+    """默认股票池里的每个代码都要有展示名。
+
+    漏掉的代码在中文报告里只会显示光秃秃的 ticker —— 扩充 universe 时最容易忘这一步，
+    这里让它在测试期就暴露，而不是等用户在报告里发现。个人股票池（configs/my_universe.csv）
+    不入库，覆盖不到，只能靠这条约定提醒。
+    """
+    import csv
+
+    from quant_agent.company_names import name_zh
+
+    with open("configs/universe_default.csv", encoding="utf-8-sig") as handle:
+        symbols = [(row.get("symbol") or next(iter(row.values()))).strip().upper() for row in csv.DictReader(handle)]
+    assert symbols, "universe_default.csv 读出来是空的"
+    missing = [s for s in symbols if not name_zh(s)]
+    assert not missing, f"这些代码缺 COMPANY_NAMES_ZH 条目: {missing}"
 
 
 def test_potential_picks_renamed_and_show_chinese_names(tmp_path: Path) -> None:
