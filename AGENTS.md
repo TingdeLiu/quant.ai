@@ -21,7 +21,8 @@ quant-ai market-report                             # 每日报告（默认 confi
 
 ## 项目约定
 
-- **测试必须离线**：`data.source=csv` + `tests/_helpers._synthetic_prices()`；`market_intel: {use_llm: false, news_feeds: [], social_enabled: false}`；实时价用注入/monkeypatch（`quant_agent.holdings.fetch_live_quotes`）。无 pytest-asyncio，MCP 工具测试用 `asyncio.run()` 直调。
+- **项目不调用任何 LLM API**。服务端只产出可核对的事实：量化统计、规则评级、第三方一致预期、手写归纳。综合、叙述、对话交给挂载 MCP 的宿主客户端。没有 `llm.py`、没有 `LLMConfig`、没有 `/api/chat`，也不要加回来。
+- **测试必须离线**：`data.source=csv` + `tests/_helpers._synthetic_prices()`；`market_intel: {news_feeds: [], social_enabled: false, symbol_news_count: 0}`；实时价用注入/monkeypatch（`quant_agent.holdings.fetch_live_quotes`）。无 pytest-asyncio，MCP 工具测试用 `asyncio.run()` 直调。
 - **双语**：面向用户的字符串用 `tr(en, zh, lang)`（`i18n.py`），英中并排书写。
 - **报告即 artifact**：生成报告后按 MCP instructions 呈现 —— 有文件访问时直接发布 `artifact_html_path`；否则 `quant_read_report('market_intel_artifact.html')` 取 HTML；最后才用 `report_markdown`。免责声明必须保留。
 - `data/portfolio.json` 只经 `holdings.py` / 两个 MCP 管理工具读写；它是叠加层，`refresh-universe` 重新生成 `my_universe.csv` 不影响它。

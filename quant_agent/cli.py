@@ -12,7 +12,7 @@ from rich.table import Table
 from quant_agent.analyze import _clean_symbols, analyze_symbols, read_symbols_file, write_analysis
 from quant_agent.config import load_config
 from quant_agent.config_tools import write_recommended_config
-from quant_agent.dashboard import write_dashboard
+from quant_agent.console import write_dashboard
 from quant_agent.data import load_prices
 from quant_agent.data_quality import build_data_quality_report, write_data_quality_report
 from quant_agent.features import build_signals
@@ -73,7 +73,6 @@ def analyze_command(
     watchlist: bool = typer.Option(False, "--watchlist", "-w", help="分析个性化股票池（quant-ai init 生成的 my_universe.csv）"),
     watchlist_path: Path = typer.Option(Path("configs/my_universe.csv"), "--watchlist-path", help="个性化股票池 CSV 路径"),
     lang: str | None = typer.Option(None, "--lang", "-l", help="output language en/zh (default en; uses your init choice if set)"),
-    config: Path | None = typer.Option(None, "--config", "-c", help="可选配置文件，用于启用 LLM 综述"),
     output_dir: Path | None = typer.Option(None, "--output-dir", "-o", help="可选：把分析写入目录（json+md）"),
     chart: bool = typer.Option(False, "--chart", help="额外导出价格+均线+RSI 的 PNG 图（需配合 --output-dir）"),
     json_only: bool = typer.Option(False, "--json", help="只输出 JSON，便于脚本调用"),
@@ -100,8 +99,7 @@ def analyze_command(
         ) + "[/red]")
         raise typer.Exit(code=2)
 
-    llm_config = load_config(config).llm if config else None
-    payload = analyze_symbols(requested, llm_config=llm_config, language=language)
+    payload = analyze_symbols(requested, language=language)
 
     if json_only:
         serializable = {k: v for k, v in payload.items() if k != "_objects"}
@@ -114,9 +112,6 @@ def analyze_command(
             console.print(Panel(f"[red]{result.error}[/red]", title=title, border_style="red"))
             continue
         _render_symbol(result, language)
-
-    if payload.get("narrative"):
-        console.print(Panel(payload["narrative"], title=tr("AI summary", "AI 综合解读", language), border_style="cyan"))
 
     console.print(f"[dim]{payload['disclaimer']}[/dim]")
 

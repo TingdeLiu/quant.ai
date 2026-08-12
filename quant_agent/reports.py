@@ -291,7 +291,6 @@ def _config_dict(config: AppConfig) -> dict[str, Any]:
         },
         "optimization": config.optimization.__dict__,
         "ml": config.ml.__dict__,
-        "llm": config.llm.__dict__,
         "paper_trading": {**config.paper_trading.__dict__, "output_dir": str(config.paper_trading.output_dir)},
         "dashboard": {
             "enabled": config.dashboard.enabled,

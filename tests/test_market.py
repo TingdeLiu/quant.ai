@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -28,7 +29,6 @@ def _offline_raw(tmp_path: Path) -> dict:
         # No network: empty feeds and LLM disabled keep the test fully offline.
         # symbol_news_count=0 关掉个股新闻：它走 yfinance 网络，不受 news_feeds=[] 约束。
         "market_intel": {
-            "use_llm": False,
             "news_feeds": [],
             "social_enabled": False,
             "symbol_news_count": 0,
@@ -87,7 +87,6 @@ def test_market_report_builds_offline(tmp_path: Path) -> None:
         # No network: empty feeds and LLM disabled keep the test fully offline.
         # symbol_news_count=0 关掉个股新闻：它走 yfinance 网络，不受 news_feeds=[] 约束。
         "market_intel": {
-            "use_llm": False,
             "news_feeds": [],
             "social_enabled": False,
             "symbol_news_count": 0,
@@ -116,7 +115,6 @@ def test_market_report_chinese(tmp_path: Path) -> None:
         "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
         # symbol_news_count=0 关掉个股新闻：它走 yfinance 网络，不受 news_feeds=[] 约束。
         "market_intel": {
-            "use_llm": False,
             "news_feeds": [],
             "social_enabled": False,
             "symbol_news_count": 0,
@@ -198,6 +196,127 @@ def test_holdings_section_first_in_html(tmp_path: Path) -> None:
     assert artifact.index("Holdings at a glance") < artifact.index("Market overview")
 
 
+def test_tabs_selector_chain_matches_markup(tmp_path: Path) -> None:
+    """标签页是纯 CSS 的，靠 `:checked ~ nth-of-type` 配对 —— 结构一歪就静默失效。
+
+    这里盯住选择器链依赖的三个前提：radio 全在 .qa-tabs 直接子级、nav/.qa-panes 排在
+    所有 radio 之后（`~` 只向后匹配）、tabbar 与 panes 里元素类型纯净且数量对齐。
+    """
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+    artifact = render_artifact_html(report)
+
+    tabs = artifact[artifact.index('<div class="qa-tabs">'):]
+    radios = re.findall(r'<input class="qa-tabsel" type="radio" name="qa-tabsel" id="(qa-tab-\d+)"( checked)?>', tabs)
+    labels = re.findall(r'<label class="qa-tab" for="(qa-tab-\d+)"', tabs)
+    panes = tabs.count('<div class="qa-pane">')
+
+    assert radios, "报告应渲染出标签页"
+    assert [r[0] for r in radios] == labels, "label[for] 必须与 radio[id] 一一对应"
+    assert len(radios) == panes, "每个标签页要有且只有一个面板"
+    assert [bool(r[1]) for r in radios] == [True] + [False] * (len(radios) - 1), "只有第一页默认选中"
+    assert len(radios) <= 6, "标签页数不能超过 _TAB_SLOTS，否则多出来的页永远打不开"
+    # `~` 只向后匹配：nav 和 .qa-panes 必须排在最后一个 radio 之后。
+    last_radio = tabs.rindex('<input class="qa-tabsel"')
+    assert last_radio < tabs.index('<nav class="qa-tabbar">') < tabs.index('<div class="qa-panes">')
+    # nth-of-type 按标签名计数：tabbar 的直接子级只能是 label，否则和 radio 序号错位。
+    tabbar = tabs[tabs.index('<nav class="qa-tabbar">'):tabs.index('<div class="qa-panes">')]
+    inner = tabbar[tabbar.index(">") + 1:tabbar.rindex("</nav>")]
+    assert re.sub(r'<label class="qa-tab".*?</label>', "", inner, flags=re.S).strip() == ""
+    # 每一页都得有对应的显示规则，否则点了没反应。
+    for i in range(1, len(radios) + 1):
+        rule = f".qa-tabsel:nth-of-type({i}):checked ~ .qa-panes > .qa-pane:nth-of-type({i})"
+        assert rule in artifact, f"缺少第 {i} 页的 :checked 显示规则"
+    # 免责声明在标签页之外，切到哪一页都看得见。
+    assert artifact.index("qa-report") < artifact.index('<div class="qa-tabs">')
+    assert "RESEARCH ONLY" in artifact[artifact.index("</div></div>"):]
+
+
+def test_detail_chart_has_axes_and_hover_readout(tmp_path: Path) -> None:
+    """走势图带坐标轴（静态）+ hover 读数（脚本增强）。
+
+    读数不为每个点存数值 —— 由 polyline 的 y 坐标反算，所以 y 必须保留小数精度，
+    取整会让高价股的读数差出几角钱。
+    """
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+    artifact = render_artifact_html(report)
+
+    # 纵轴三档价格 + 横轴三档日期 + 三条网格线。
+    assert artifact.count('class="dp-grid"') == artifact.count('class="dp-chart"') * 3
+    assert artifact.count('class="dp-ay"') == artifact.count('class="dp-ax"') == artifact.count('class="dp-chart"')
+    assert re.search(r'<div class="dp-ax">(<span>\d\d-\d\d</span>){3}</div>', artifact), "横轴应有 MM-DD 三档刻度"
+    # 读数用的价格串：首值(分) + 逐点差分。
+    assert re.search(r'<div class="dp-chart" data-v="-?\d+\|-?\d+(,-?\d+)*">', artifact)
+    # 脚本里的几何常量必须和 SVG 用的一致，否则圆点会错位。
+    assert "var H=150,P=6,W=640" in artifact
+    assert 'viewBox="0 0 640 150"' in artifact
+    # 游标/圆点/气泡由脚本按需创建，不预先为每张图写空 div（样式仍在 CSS 里）。
+    for cls in ("dp-cursor", "dp-dot", "dp-tip"):
+        assert f'<div class="{cls}"' not in artifact
+        assert f".dp-{cls.split('-')[1]} {{" in artifact or f".{cls} {{" in artifact
+
+
+def test_detail_chart_prices_decode_exactly(tmp_path: Path) -> None:
+    """差分编码的价格串必须能无损还原 —— 读数是给人看价位的，不能有可见误差。"""
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+    artifact = render_artifact_html(report)
+
+    encoded = re.findall(r'<div class="dp-chart" data-v="([^"]+)"', artifact)
+    assert encoded, "应渲染出走势图"
+    # 同一标的会在多个栏目里各嵌一份图（表格行 / 卡片 / 瓦片），所以按值比对而非按序。
+    charts = report["detail_charts"]
+    curves = [w["points"] for sym in charts for w in charts[sym].values() if len(w["points"]) >= 2]
+
+    def matches(cents: list[int], points: list[float]) -> bool:
+        # 按分做整数比较，避开浮点：编码就是 round(元价*100)，差分累加必须精确还原它。
+        return len(cents) == len(points) and all(
+            c == round(p * 100) for c, p in zip(cents, points, strict=True)
+        )
+
+    for blob in set(encoded):
+        head, _, rest = blob.partition("|")
+        cents = [int(head)]
+        for d in rest.split(","):
+            cents.append(cents[-1] + int(d))
+        assert any(matches(cents, p) for p in curves), f"解码结果对不上任何一条曲线: {blob[:40]}"
+
+
+def _tab_labels(artifact: str) -> list[str]:
+    return re.findall(r'<label class="qa-tab" for="qa-tab-\d+">([^<]*?)(?:<span|</label>)', artifact)
+
+
+def test_tab_groups_skip_empty_and_keep_numbering(tmp_path: Path) -> None:
+    """整组为空的标签页不出现；章节编号跨标签页保持连续。"""
+    raw = _offline_raw(tmp_path)
+    _write_portfolio(tmp_path)
+    config = parse_config(raw, base=tmp_path)
+    report = build_market_report(config, quote_fetcher=lambda symbols: {}, target_fetcher=lambda symbols: {})
+
+    artifact = render_artifact_html(report)
+    nums = re.findall(r'<span class="sec-num">(\d+)</span>', artifact)
+    assert nums == [f"{i:02d}" for i in range(1, len(nums) + 1)], "章节编号必须跨标签页连续"
+    labels = _tab_labels(artifact)
+    assert labels[0] == "Holdings", "持仓页永远排第一，也是默认打开的那页"
+    assert "Notes" in labels, "离线跑会攒下 warnings，说明页应当出现"
+
+    # 说明页的唯一来源是 warnings：清空后整组为空，该标签页必须消失，编号跟着收缩。
+    report["warnings"] = []
+    trimmed = render_artifact_html(report)
+    assert "Notes" not in _tab_labels(trimmed)
+    assert len(_tab_labels(trimmed)) == len(labels) - 1
+    trimmed_nums = re.findall(r'<span class="sec-num">(\d+)</span>', trimmed)
+    assert trimmed_nums == [f"{i:02d}" for i in range(1, len(trimmed_nums) + 1)]
+    assert len(trimmed_nums) == len(nums) - 1, "空 section 不该占用章节号"
+
+
 def test_render_artifact_html_self_contained(tmp_path: Path) -> None:
     raw = _offline_raw(tmp_path)
     _write_portfolio(tmp_path)
@@ -244,7 +363,6 @@ def test_pick_cards_pin_holding_and_show_valuation_range(tmp_path: Path) -> None
         "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
         # symbol_news_count=0 关掉个股新闻：它走 yfinance 网络，不受 news_feeds=[] 约束。
         "market_intel": {
-            "use_llm": False,
             "news_feeds": [],
             "social_enabled": False,
             "symbol_news_count": 0,
@@ -482,7 +600,6 @@ def test_potential_picks_renamed_and_show_chinese_names(tmp_path: Path) -> None:
         "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
         # symbol_news_count=0 关掉个股新闻：它走 yfinance 网络，不受 news_feeds=[] 约束。
         "market_intel": {
-            "use_llm": False,
             "news_feeds": [],
             "social_enabled": False,
             "symbol_news_count": 0,
@@ -647,7 +764,6 @@ def test_detail_charts_skip_duplicate_long_windows(tmp_path: Path) -> None:
         "strategy": {"benchmark": "SPY", "signal_weights": {"momentum_12_1": 1.0, "trend_20_50": 1.0}},
         # symbol_news_count=0 关掉个股新闻：它走 yfinance 网络，不受 news_feeds=[] 约束。
         "market_intel": {
-            "use_llm": False,
             "news_feeds": [],
             "social_enabled": False,
             "symbol_news_count": 0,
@@ -678,7 +794,16 @@ def test_report_html_has_expandable_detail_panels(tmp_path: Path) -> None:
     assert 'class="dp-svg"' in artifact and "polyline" in artifact
     # radio 分组名必须全文档唯一（同一标的可出现在多个栏目）。
     assert 'name="dp-1"' in artifact and 'name="dp-2"' in artifact
-    # 纯 CSS 交互：artifact 片段必须保持零 JS。
-    assert "<script" not in artifact
+    # 交互必须是纯 CSS：脚本只做 hover 读数增强，整段剥掉后展开/切换的钩子一个不能少，
+    # 坐标轴也还在（宿主用 innerHTML 注入片段时 <script> 不执行，报告仍须完整可用）。
+    stripped = re.sub(r"<script>.*?</script>", "", artifact, flags=re.S)
+    for hook in (
+        'class="row-toggle"', 'class="detail-row"', '<details class="dp-details">',
+        'class="dp-radio"', 'class="dp-tab"', 'class="dp-pane"',   # 时段切换
+        'class="qa-tabsel"', 'class="qa-tab"',                     # 顶部标签页
+        'class="dp-grid"', 'class="dp-ay"', 'class="dp-ax"',       # 坐标轴
+    ):
+        assert hook in stripped, f"{hook} 不该依赖脚本"
+    assert stripped.count("<script") == 0, "除 hover 增强外不该再有脚本"
     # 整页版同样带详情面板。
     assert 'class="dp-radio"' in render_html(report)

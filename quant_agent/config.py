@@ -85,16 +85,6 @@ class MLConfig:
 
 
 @dataclass(frozen=True)
-class LLMConfig:
-    enabled: bool
-    provider: str
-    model: str
-    endpoint: str | None
-    api_key_env: str
-    prompt_version: str
-
-
-@dataclass(frozen=True)
 class MarketIntelConfig:
     enabled: bool
     output_dir: Path
@@ -104,7 +94,6 @@ class MarketIntelConfig:
     max_news_items: int
     symbol_news_count: int
     max_symbol_news: int
-    use_llm: bool
     request_timeout: int
 
 
@@ -172,7 +161,6 @@ class AppConfig:
     evaluation: EvaluationConfig
     optimization: SignalOptimizationConfig
     ml: MLConfig
-    llm: LLMConfig
     market_intel: MarketIntelConfig
     paper_trading: PaperTradingConfig
     dashboard: DashboardConfig
@@ -225,7 +213,6 @@ def parse_config(raw: dict[str, Any], base: Path | None = None) -> AppConfig:
     evaluation = raw.get("evaluation", {})
     optimization = raw.get("optimization", {})
     ml = raw.get("ml", {})
-    llm = raw.get("llm", {})
     market_intel = raw.get("market_intel", {})
     paper_trading = raw.get("paper_trading", {})
     dashboard = raw.get("dashboard", {})
@@ -310,14 +297,6 @@ def parse_config(raw: dict[str, Any], base: Path | None = None) -> AppConfig:
             model_version=str(ml.get("model_version", "ridge_v1")),
             feature_version=str(ml.get("feature_version", "technical_v1")),
         ),
-        llm=LLMConfig(
-            enabled=bool(llm.get("enabled", False)),
-            provider=str(llm.get("provider", "openai-compatible")),
-            model=str(llm.get("model", "gpt-4.1-mini")),
-            endpoint=llm.get("endpoint"),
-            api_key_env=str(llm.get("api_key_env", "OPENAI_API_KEY")),
-            prompt_version=str(llm.get("prompt_version", "research_review_v1")),
-        ),
         market_intel=MarketIntelConfig(
             enabled=bool(market_intel.get("enabled", True)),
             output_dir=_resolve_path(base, market_intel.get("output_dir", report_output_dir)),
@@ -327,7 +306,6 @@ def parse_config(raw: dict[str, Any], base: Path | None = None) -> AppConfig:
             max_news_items=int(market_intel.get("max_news_items", 24)),
             symbol_news_count=int(market_intel.get("symbol_news_count", 8)),
             max_symbol_news=int(market_intel.get("max_symbol_news", 3)),
-            use_llm=bool(market_intel.get("use_llm", True)),
             request_timeout=int(market_intel.get("request_timeout", 12)),
         ),
         paper_trading=PaperTradingConfig(

@@ -100,7 +100,7 @@ The per-holding news blurbs are **hand-written and read from `data/news_digest.j
 2. **Signals** — cross-sectional, point-in-time-lagged factors, z-scored per day.
 3. **Portfolio & risk** — deterministic target weights under position/turnover/liquidity limits.
 4. **Evaluation** — train / validation / test split, walk-forward windows, and benchmark-relative metrics (Sharpe, Sortino, Calmar, max drawdown, alpha/beta).
-5. **AI (optional)** — an LLM only *reviews* and *narrates* research; it never generates orders. Falls back to an offline template when no API key is set.
+5. **AI** — the project calls **no LLM API of its own**. It ships facts you can check: quantitative statistics, rule-based ratings, and third-party consensus. Synthesis and discussion happen in whichever AI client the MCP server is mounted in, so there is no API key, no extra cost, and no second model between you and the data.
 
 ## Documentation
 

@@ -1,11 +1,12 @@
-"""Real-data payload for the Tyndall Markets dashboard (quant_agent/web/ui_kits/markets).
+"""Per-symbol markets payload: ratings, summaries and bull/bear cases from real quant data.
 
-Maps the project's existing quant signals and price statistics onto the data shape
-the design expects (``TICKERS`` / ``WATCH`` / ``PRICE`` / ``defaultSym``). The AI
-analyst rating, summary, bull/bear cases and the research ``recommendation`` are all
-derived from real metrics — no fundamentals, no forecasts. Research only; not
-investment advice. Output respects ``config.language`` (English default, Chinese
-optional) via the shared ``tr`` helper.
+三个消费方共用这一份：控制台 `/` 的「行情」标签页、HTTP `/api/markets-data`、MCP 工具
+``quant_get_markets_data``。评级、摘要、多空论点与研究 ``recommendation`` 全部由横截面
+信号和价格统计派生 —— 没有基本面、没有预测。Research only；不构成投资建议。输出语言
+跟随 ``config.language``（默认英文）走共用的 ``tr`` helper。
+
+字段名（``TICKERS`` / ``WATCH`` / ``PRICE`` / ``defaultSym``）沿袭当初那个 React 仪表盘的
+数据形状；该页面已删除，字段名保留不动以免波及 MCP 工具的调用方。
 """
 
 from __future__ import annotations

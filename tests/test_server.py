@@ -11,6 +11,7 @@ from _helpers import _config
 
 from quant_agent.alerts import alert_summary, build_alerts
 from quant_agent.config import parse_config
+from quant_agent.console import render_console_html
 from quant_agent.notifications import build_notifications, dispatch_notifications
 from quant_agent.server import (
     OperationAuditLog,
@@ -18,7 +19,6 @@ from quant_agent.server import (
     RuntimeStatus,
     _config_for_run,
     _handler_factory,
-    build_home_html,
 )
 
 
@@ -51,20 +51,48 @@ def test_notifications_write_outbox(tmp_path: Path) -> None:
     assert (config.notifications.output_dir / "notification_outbox.json").exists()
 
 
-def test_runtime_status_store_and_home_html(tmp_path: Path) -> None:
+def test_runtime_status_store_and_console_html(tmp_path: Path) -> None:
     history = RunHistory(tmp_path / "run_history.json")
     history.append({"run_id": "run-1", "status": "success", "report_dir": str(tmp_path / "runs" / "run-1")})
     status = RuntimeStatus(tmp_path / "runtime_status.json", history)
     status.write({"running": False, "last_status": "success", "config": "configs/full_roadmap.yaml"})
     config = _config(tmp_path)
-    html = build_home_html(config, status.read(), history.read())
-    assert "Quant Agent Control" in html
-    assert "Quant Agent 控制台" in html
-    assert "setLanguage('zh')" in html
+    html = render_console_html(config, status.read(), history.read())
+
+    # 四个标签页（原 /console 与 /dashboard 已并进来），用 cs 组名。
+    for label in ("Report", "Markets", "Backtest", "Ops"):
+        assert f">{label}<" in html or f">{label}<span" in html
+    assert 'name="cs-tabsel"' in html
+    # 运行页的控制项与历史。
     assert "/api/run" in html
-    assert "api-token" in html
+    assert "/api/market-report" in html
     assert "run-1" in html
     assert status.read()["last_status"] == "success"
+    # 复用报告的视觉，不再自带一套 CSS。
+    assert "qa-report" in html and "--orange" in html
+
+
+def test_console_tabs_do_not_collide_with_embedded_report(tmp_path: Path) -> None:
+    """报告自带一层标签页；两层 radio 同名会互相清掉选中态，必须用不同的组名。"""
+    history = RunHistory(tmp_path / "run_history.json")
+    status = RuntimeStatus(tmp_path / "runtime_status.json", history)
+    status.write({"running": False, "last_status": "idle"})
+    config = _config(tmp_path)
+    report = {
+        "language": "en",
+        "as_of_date": "2026-08-12",
+        "data_status": "ok",
+        "generated_at": "2026-08-12T00:00:00",
+        "disclaimer": "Research only.",
+        "market_overview": {"symbols_analyzed": 3},
+        "warnings": ["synthetic"],
+    }
+    html = render_console_html(config, status.read(), history.read(), report=report)
+    assert 'name="cs-tabsel"' in html, "外层控制台用 cs 组"
+    assert 'name="qa-tabsel"' in html, "内嵌报告保留 qa 组"
+    # 报告的免责声明与数据日期必须跟着内容走，不能只留控制台自己的页眉。
+    assert "Research only." in html
+    assert "2026-08-12" in html
 
 
 def test_dashboard_run_config_uses_configured_runs_dir(tmp_path: Path) -> None:
@@ -160,6 +188,41 @@ def test_dashboard_api_requires_token_and_audits_denials(tmp_path: Path) -> None
         assert records[-2]["status"] == "unauthorized"
         assert records[-1]["action"] == "run_backtest"
         assert records[-1]["status"] == "accepted"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_legacy_page_urls_redirect_to_console(tmp_path: Path) -> None:
+    """/console、/dashboard、/markets 三个旧页面已并进 /，保留重定向不让老书签 404。"""
+    config = _config(tmp_path)
+    history = RunHistory(tmp_path / "reports" / "run_history.json")
+    status = RuntimeStatus(tmp_path / "reports" / "runtime_status.json", history)
+    handler = _handler_factory(
+        config_path=tmp_path / "config.yaml",
+        config=config,
+        status=status,
+        history=history,
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args: object, **kwargs: object) -> None:
+            return None
+
+    opener = urllib.request.build_opener(NoRedirect)
+    try:
+        for path in ("/console", "/dashboard", "/markets", "/m/ui_kits/markets/index.html"):
+            try:
+                opener.open(base_url + path)
+                raise AssertionError(f"{path} 应当重定向而不是直接返回")
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 302, f"{path} -> {exc.code}"
+                assert exc.headers["Location"] == "/"
     finally:
         server.shutdown()
         server.server_close()

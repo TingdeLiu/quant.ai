@@ -17,18 +17,14 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from quant_agent.config import AppConfig, DashboardSecurityConfig, ReportConfig, load_config
-from quant_agent.i18n import normalize_language, tr
-from quant_agent.llm import generate_chat_reply
+from quant_agent.console import render_console_html
 from quant_agent.market_intel import build_market_report, write_market_report
 from quant_agent.markets_data import build_markets_data
 from quant_agent.pipeline import run_research_backtest
-from quant_agent.web_templates import build_home_html
 
 STATUS_FILE = "runtime_status.json"
 HISTORY_FILE = "run_history.json"
 MARKET_INTEL_STATUS_FILE = "market_intel_status.json"
-WEB_DIR = Path(__file__).resolve().parent / "web"
-MARKETS_INDEX_REL = "ui_kits/markets/index.html"
 
 
 class RunHistory:
@@ -353,15 +349,9 @@ def _handler_factory(
             parsed = urlparse(self.path)
             path = parsed.path
             if path == "/":
-                self._send_markets_app()
-            elif path == "/console":
-                self._send_html(build_home_html(config, status.read(), history.read()))
-            elif path == "/dashboard":
-                self._send_file(report_dir / "dashboard.html", "text/html; charset=utf-8")
-            elif path == "/markets" or path == "/m/" + MARKETS_INDEX_REL:
-                self._send_markets_app()
-            elif path.startswith("/m/"):
-                self._send_web_static(unquote(path[len("/m/"):]))
+                self._send_console()
+            elif path in ("/console", "/dashboard", "/markets") or path.startswith("/m/"):
+                self._redirect("/")  # 三个旧页面已并进 / 的标签页
             elif path.startswith("/api/") and not self._authorized("api_read"):
                 return
             elif path == "/api/status":
@@ -399,9 +389,6 @@ def _handler_factory(
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             if path.startswith("/api/") and not self._authorized("api_write"):
-                return
-            if path == "/api/chat":
-                self._handle_chat()
                 return
             if path == "/api/run":
                 started = status.start_job(config_path)
@@ -511,59 +498,20 @@ def _handler_factory(
             self.send_header("Content-Length", "0")
             self.end_headers()
 
-        def _send_web_static(self, relative: str) -> None:
-            target = (WEB_DIR / relative).resolve()
-            if WEB_DIR not in target.parents and target != WEB_DIR:
-                self.send_error(HTTPStatus.FORBIDDEN, "Forbidden")
-                return
-            self._send_file(target, _content_type(target))
+        def _send_console(self) -> None:
+            """统一控制台：报告 / 行情 / 回测 / 运行 四个标签页。
 
-        def _send_markets_app(self) -> None:
-            index_path = WEB_DIR / MARKETS_INDEX_REL
-            if not index_path.exists():
-                self.send_error(HTTPStatus.NOT_FOUND, "Markets UI not found")
-                return
-            html = index_path.read_text(encoding="utf-8")
-            # Absolute <base> so the relative asset refs in index.html/chrome.jsx
-            # (../../styles.css, chrome.jsx, in-JSX images) resolve regardless of
-            # which URL serves this page ("/", "/markets", or the static path).
-            base_dir = MARKETS_INDEX_REL.rsplit("/", 1)[0]
-            html = html.replace("<head>", f'<head>\n<base href="/m/{base_dir}/">', 1)
-            html = html.replace(
-                '<script type="text/babel" src="chrome.jsx"></script>',
-                _markets_data_script(config) + '\n<script type="text/babel" src="chrome.jsx"></script>',
-                1,
-            )
-            self._send_html(html)
-
-        def _handle_chat(self) -> None:
-            body = self._read_json_body()
-            if body is None:
-                return
-            symbol = str(body.get("symbol") or "").upper()
-            raw = body.get("messages")
-            messages: list[dict[str, str]] = []
-            for item in raw if isinstance(raw, list) else []:
-                if not isinstance(item, dict):
-                    continue
-                content = str(item.get("text") or item.get("content") or "").strip()
-                if not content:
-                    continue
-                role = "assistant" if item.get("role") == "assistant" else "user"
-                messages.append({"role": role, "content": content})
-            if not messages:
-                self._send_json({"error": "empty"}, code=HTTPStatus.BAD_REQUEST)
-                return
-            data = _safe_markets_data(config)
-            lang = normalize_language(data.get("lang") or config.language)
-            ticker = (data.get("TICKERS") or {}).get(symbol)
-            system = _chat_system(lang) + "\n\n" + _chat_context(symbol, ticker, data, lang)
-            text, meta = generate_chat_reply(config.llm, system, messages)
-            offline = text is None
-            if offline:
-                text = _offline_chat_reply(messages[-1]["content"], symbol, ticker, lang)
-            self._send_json(
-                {"role": "assistant", "text": text, "offline": offline, "status": meta.get("status")}
+            报告与行情取数都可能失败（还没生成、数据源挂了），各自降级为占位块，不让
+            整页 500。
+            """
+            self._send_html(
+                render_console_html(
+                    config,
+                    status.read(),
+                    history.read(),
+                    report=_load_json(market_intel.output_dir / "market_intel.json"),
+                    markets=_safe_markets_data(config),
+                )
             )
 
         def _read_json_body(self) -> dict[str, Any] | None:
@@ -680,12 +628,12 @@ def _content_type(path: Path) -> str:
         return "text/markdown; charset=utf-8"
     if suffix == ".css":
         return "text/css; charset=utf-8"
-    if suffix in (".js", ".jsx"):
-        return "text/babel; charset=utf-8" if suffix == ".jsx" else "application/javascript; charset=utf-8"
+    if suffix == ".js":
+        return "application/javascript; charset=utf-8"
     return "application/octet-stream"
 
 
-# 首页、/api/markets-data 和聊天的每条消息都要这份数据，而底层价格库每天至多刷新
+# 控制台每次打开和 /api/markets-data 每次请求都要这份数据，而底层价格库每天至多刷新
 # 一次 —— 逐请求重算（读全库 + 全历史滚动信号）纯属浪费。短 TTL 记忆缓存即可，
 # 失败结果不缓存，保证瞬时故障不会黏住 60 秒。
 _MARKETS_CACHE_TTL_S = 60.0
@@ -708,121 +656,6 @@ def _safe_markets_data(config: AppConfig) -> dict[str, Any]:
     with _markets_cache_lock:
         _markets_cache[id(config)] = (now, config, data)
     return data
-
-
-def _markets_data_script(config: AppConfig) -> str:
-    """Inline the real markets data so the dashboard renders it instead of placeholders."""
-    data = _safe_markets_data(config)
-    if not data.get("TICKERS"):
-        return ""  # fall back to the seeded data bundled in chrome.jsx
-    payload = json.dumps(data, default=str).replace("</", "<\\/")
-    return f"<script>window.MARKETS_DATA = {payload};</script>"
-
-
-def _chat_system(lang: str) -> str:
-    """System prompt for the dashboard AI analyst — research only, never order tickets."""
-    if lang == "zh":
-        return (
-            "你是 Tyndall Lumen，一位严谨的美股量化研究助理。只能基于下方提供的量化数据与研究结论进行讨论，"
-            "可以解释评级、多空逻辑、风险与各项指标的含义。这是研究与学习用途，不构成投资建议，"
-            "绝不能给出下单指令、订单票、仓位指令或实盘交易授权。若被问到是否买入，请从研究角度说明依据与风险，"
-            "并提醒用户自行做尽职调查。请用简洁、专业的中文回答，并尽量引用具体数字。"
-        )
-    return (
-        "You are Tyndall Lumen, a rigorous US-equity quant research assistant. Discuss ONLY using the "
-        "quantitative data and research read provided below; explain the rating, the bull/bear logic, the "
-        "risks, and what the figures mean. This is research and education, not investment advice — never "
-        "produce order tickets, broker instructions, position-sizing directives, or live-trading "
-        "authorization. If asked whether to buy, frame the evidence and the risks from a research view and "
-        "remind the user to do their own due diligence. Answer concisely and professionally, citing the "
-        "specific figures."
-    )
-
-
-def _chat_context(symbol: str, ticker: dict[str, Any] | None, data: dict[str, Any], lang: str) -> str:
-    """Compact, grounding context block appended to the system prompt for the chat."""
-    lines = [tr("Data for this discussion:", "本次讨论的数据：", lang)]
-    if data.get("as_of"):
-        lines.append(tr(f"As-of date: {data['as_of']}", f"数据截止日：{data['as_of']}", lang))
-    if data.get("brief"):
-        lines.append(tr("Market brief: ", "市场简报：", lang) + str(data["brief"]))
-    picks = data.get("picks") or []
-    if picks:
-        joined = "; ".join(
-            f"{p.get('sym')} {p.get('ratingLabel')}/{p.get('stance')} ({_pct(p.get('chg'))})" for p in picks
-        )
-        lines.append(tr("Quant-screen watchlist: ", "量化筛选自选：", lang) + joined)
-    if ticker is None:
-        lines.append(tr(f"No data is available for {symbol or 'this symbol'}.",
-                        f"暂无 {symbol or '该标的'} 的数据。", lang))
-        return "\n".join(lines)
-    lines.append(
-        tr(
-            f"Focus symbol {symbol} — {ticker.get('name')} ({ticker.get('sector')}): price {_money(ticker.get('price'))}, "
-            f"today {_pct(ticker.get('chg'))}, rating {ticker.get('rating')} ({ticker.get('ratingLabel')}).",
-            f"重点标的 {symbol} — {ticker.get('name')}（{ticker.get('sector')}）：价格 {_money(ticker.get('price'))}，"
-            f"今日 {_pct(ticker.get('chg'))}，评级 {ticker.get('rating')}（{ticker.get('ratingLabel')}）。",
-            lang,
-        )
-    )
-    stats = ticker.get("stats") or {}
-    if stats:
-        lines.append(tr("Stats — ", "关键数据 — ", lang) + "; ".join(f"{k}: {v}" for k, v in stats.items()))
-    rec = ticker.get("recommendation") or {}
-    if rec:
-        lines.append(tr("Research stance: ", "研究立场：", lang) + f"{rec.get('stance')} — {rec.get('line')}")
-    if ticker.get("bull"):
-        lines.append(tr("Bull case: ", "看多逻辑：", lang) + " | ".join(ticker["bull"]))
-    if ticker.get("bear"):
-        lines.append(tr("Bear case: ", "看空逻辑：", lang) + " | ".join(ticker["bear"]))
-    if ticker.get("summary"):
-        lines.append(tr("Analyst summary: ", "分析摘要：", lang) + str(ticker["summary"]))
-    return "\n".join(lines)
-
-
-def _offline_chat_reply(question: str, symbol: str, ticker: dict[str, Any] | None, lang: str) -> str:
-    """Deterministic, data-grounded fallback when no LLM provider is reachable."""
-    if ticker is None:
-        return tr(
-            f"I don't have data for {symbol or 'that symbol'} yet — load the markets data and ask again.",
-            f"我暂时没有 {symbol or '该标的'} 的数据，请先加载行情数据后再提问。",
-            lang,
-        )
-    q = question.lower()
-    label = ticker.get("ratingLabel") or ticker.get("rating")
-    rec = ticker.get("recommendation") or {}
-    parts = [tr(f"{symbol} reads as {label} on the quant screen.",
-                f"{symbol} 在量化筛选中呈现「{label}」。", lang)]
-    if any(w in q for w in ("risk", "风险", "drawdown", "回撤", "volat", "波动")):
-        parts.append(tr("Key risks — ", "主要风险 — ", lang) + " ".join(ticker.get("bear") or []))
-    elif any(w in q for w in ("buy", "should", "买", "能买", "值得", "hold", "sell", "卖")):
-        if rec.get("line"):
-            parts.append(rec["line"])
-        parts.append(tr("This is research only — not a buy or sell instruction; do your own due diligence.",
-                        "这只是研究判断，并非买卖指令，请自行做尽职调查。", lang))
-    elif any(w in q for w in ("valuation", "估值", "pe", "市盈", "stat", "数据", "number", "指标")):
-        stats = ticker.get("stats") or {}
-        parts.append(tr("Key stats — ", "关键数据 — ", lang) + "; ".join(f"{k}: {v}" for k, v in stats.items()))
-    else:
-        if rec.get("line"):
-            parts.append(rec["line"])
-        parts.append(tr("Bull: ", "看多：", lang) + (ticker.get("bull") or [""])[0])
-        parts.append(tr("Bear: ", "看空：", lang) + (ticker.get("bear") or [""])[0])
-    return " ".join(p for p in parts if p)
-
-
-def _pct(value: Any) -> str:
-    try:
-        return f"{float(value):+.1f}%"
-    except (TypeError, ValueError):
-        return "—"
-
-
-def _money(value: Any) -> str:
-    try:
-        return f"${float(value):,.2f}"
-    except (TypeError, ValueError):
-        return str(value)
 
 
 def _now() -> str:

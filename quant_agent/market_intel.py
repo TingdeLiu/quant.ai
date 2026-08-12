@@ -33,7 +33,6 @@ from quant_agent.config import AppConfig
 from quant_agent.data import load_prices
 from quant_agent.features import build_signals
 from quant_agent.i18n import normalize_language, tr
-from quant_agent.llm import generate_market_narrative
 from quant_agent.recommendations import (
     RECOMMENDATION_PROFILES,
     classify_recommendation_risk,
@@ -88,6 +87,9 @@ _FUND_TRACKER_SYMBOLS = {spec["symbol"] for spec in FUND_TRACKERS}
 _DETAIL_WINDOWS: list[tuple[str, int]] = [("1W", 5), ("1M", 21), ("6M", 126), ("1Y", 252), ("5Y", 1260)]
 _DETAIL_MAX_POINTS = 100  # 每条曲线降采样上限，控制 HTML/JSON 体积
 _DETAIL_DEFAULT_TF = "1M"
+_CHART_H = 150  # 走势图 viewBox 高度，与 CSS 里的 .dp-svg 高度一致
+_CHART_W = 640  # viewBox 宽度；preserveAspectRatio="none"，实际按容器宽拉伸
+_CHART_PAD = 6  # 上下留白，避免曲线贴边；hover 反算价格要用同一个值
 _TF_LABELS: dict[str, tuple[str, str]] = {
     "1W": ("1W", "近1周"),
     "1M": ("1M", "近1月"),
@@ -192,8 +194,6 @@ def build_market_report(
         "company_news": {},
         "social": [],
         "social_enabled": mi.social_enabled,
-        "llm_narrative": None,
-        "llm_metadata": {"status": "skipped"},
         "warnings": [],
         "sources": {"news_feeds": mi.news_feeds, "social_feeds": mi.social_feeds},
         "disclaimer": _disclaimer(lang),
@@ -283,13 +283,6 @@ def build_market_report(
         _attach_news_digest(report, load_news_digest(config.portfolio_path.parent / "news_digest.json"))
     except ValueError as exc:
         report["warnings"].append(f"news_digest_unreadable: {exc}")
-
-    # Optional LLM synthesis (offline-safe fallback inside the llm helper).
-    if mi.use_llm:
-        prompt = _build_llm_prompt(report)
-        narrative, meta = generate_market_narrative(config.llm, prompt)
-        report["llm_narrative"] = narrative
-        report["llm_metadata"] = meta
 
     return report
 
@@ -886,6 +879,7 @@ def _build_detail_charts(by_symbol: dict[str, pd.DataFrame], symbols: list[str])
             windows[label] = {
                 "points": [round(v, 4) for v in _downsample(tail_closes)],
                 "start": _day_str(dates.iloc[-len(tail_closes)]),
+                "mid": _day_str(dates.iloc[-(len(tail_closes) // 2 or 1)]),  # 横轴中间刻度
                 "end": _day_str(dates.iloc[-1]),
                 "chg_pct": round((last / first - 1) * 100, 2) if first else None,
                 "low": round(min(tail_closes), 2),
@@ -1107,37 +1101,6 @@ def _parse_date(value: str) -> float | None:
 # ---------------------------------------------------------------------------
 
 
-def _build_llm_prompt(report: dict[str, Any]) -> str:
-    lang = normalize_language(report.get("language", "en"))
-    lines = [tr(
-        "Using the data below, write a daily US-equity research brief in English, clearly "
-        "separating potential-pick research candidates from high-risk names, with reasoning.",
-        "请基于以下数据，写一份今日美股研究简报（中文），明确区分潜力股研究候选和高风险标的，并给出依据。",
-        lang,
-    ), ""]
-    overview = report.get("market_overview") or {}
-    if overview:
-        lines.append(f"{tr('Market overview', '市场概览', lang)}: {json.dumps(overview, ensure_ascii=False)}")
-    if report.get("buy_candidates"):
-        lines.append(f"{tr('Potential picks (quant screen)', '潜力股（量化筛选）', lang)}: {json.dumps(report['buy_candidates'], ensure_ascii=False)}")
-    if report.get("high_risk"):
-        lines.append(f"{tr('High-risk names (quant screen)', '高风险标的（量化筛选）', lang)}: {json.dumps(report['high_risk'], ensure_ascii=False)}")
-    if report.get("quant_candidates"):
-        lines.append(f"{tr('Quant candidates by horizon', '分类型量化候选', lang)}: {json.dumps(report['quant_candidates'], ensure_ascii=False)}")
-    headlines = [f"- [{n.get('source')}] {n.get('title')}" for n in report.get("news", [])[:15]]
-    if headlines:
-        lines.append(tr("Latest financial-media headlines:", "最新财经媒体头条：", lang))
-        lines.extend(headlines)
-    lines.append("")
-    lines.append(tr(
-        "Requirements: a research tone; no order/position instructions or live-trading authorization; "
-        "cite the data behind each conclusion; end with one risk note.",
-        "要求：用研究口吻，不要给出下单指令、仓位指令或实盘授权；对每个结论说明数据依据；最后加一句风险提示。",
-        lang,
-    ))
-    return "\n".join(lines)
-
-
 def _fmt_money(value: Any, signed: bool = False) -> str:
     if value is None:
         return "—"
@@ -1330,11 +1293,6 @@ def render_markdown(report: dict[str, Any]) -> str:
                 f"| {f['symbol']} | {f['label']} | {f['last_price']} | {day} | "
                 f"{f.get('ret_5d_pct')}% | {f.get('ret_21d_pct')}% |"
             )
-        lines.append("")
-
-    if report.get("llm_narrative"):
-        lines.append(f"## {tr('AI synthesis', 'AI 综合分析', lang)}")
-        lines.append(report["llm_narrative"])
         lines.append("")
 
     if report.get("buy_candidates"):
@@ -1560,7 +1518,6 @@ _CSS_COMPONENTS = """
 .qa-report .pos { color: var(--green); } .qa-report .neg { color: var(--down); } .qa-report .flat { color: var(--muted); } .qa-report .muted { color: var(--faint); }
 
 /* Narrative */
-.qa-report .narrative { background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--orange); border-radius: 0 14px 14px 0; padding: 20px 24px; white-space: pre-wrap; line-height: 1.9; font-size: 15px; color: var(--ink-soft); }
 
 /* News */
 .qa-report .news-list { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
@@ -1616,6 +1573,17 @@ _CSS_COMPONENTS = """
 .qa-report .dp-pane { display: none; }
 .qa-report .dp-svg { width: 100%; height: 150px; display: block; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
 .qa-report .dp-caption { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--muted); flex-wrap: wrap; }
+/* 坐标轴 + hover 读数。所有覆盖层 pointer-events:none，鼠标事件始终落在 svg 上。 */
+.qa-report .dp-chart { position: relative; }
+.qa-report .dp-grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 5; vector-effect: non-scaling-stroke; }
+.qa-report .dp-ay { position: absolute; inset: 0 auto 0 5px; height: 150px; padding: 1px 0; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }
+.qa-report .dp-ay span, .qa-report .dp-ax span { font-family: var(--mono); font-size: 9.5px; line-height: 1; color: var(--faint); }
+.qa-report .dp-ay span { background: var(--card); padding: 1px 3px; border-radius: 3px; }
+.qa-report .dp-ax { display: flex; justify-content: space-between; padding: 5px 4px 0; }
+.qa-report .dp-cursor { position: absolute; top: 0; height: 150px; width: 1px; background: var(--orange); opacity: 0.55; pointer-events: none; }
+.qa-report .dp-dot { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 0 2px var(--card); pointer-events: none; }
+.qa-report .dp-tip { position: absolute; transform: translate(-50%, -140%); background: var(--ink); color: var(--paper); font-family: var(--mono); font-size: 10.5px; font-weight: 500; padding: 3px 8px; border-radius: 6px; white-space: nowrap; pointer-events: none; z-index: 3; }
+.qa-report .dp-cursor[hidden], .qa-report .dp-dot[hidden], .qa-report .dp-tip[hidden] { display: none; }
 .qa-report details.dp-details { margin-top: 8px; }
 .qa-report details.dp-details > summary { list-style: none; cursor: pointer; font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
 .qa-report details.dp-details > summary::-webkit-details-marker { display: none; }
@@ -1640,25 +1608,102 @@ _CSS_COMPONENTS += "".join(
     for i in range(1, len(_DETAIL_WINDOWS) + 1)
 )
 
+# 顶部栏目切换：把 11 个 section 收进几个标签页，首屏只渲染一页。
+_CSS_COMPONENTS += """
+.qa-report .qa-tabs { margin-top: 30px; }
+.qa-report .qa-tabsel { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+.qa-report .qa-tabbar { display: flex; flex-wrap: wrap; gap: 0 26px; border-bottom: 1px solid var(--line-2); }
+.qa-report .qa-tab { font-family: var(--head); font-size: 13.5px; font-weight: 600; letter-spacing: 0.02em; padding: 11px 2px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; user-select: none; }
+.qa-report .qa-tab:hover { color: var(--ink-soft); }
+.qa-report .qa-tab .qa-tab-n { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-left: 7px; }
+.qa-report .qa-pane { display: none; }
+.qa-report .qa-pane > section:first-of-type { margin-top: 36px; }
+@media (max-width: 600px) { .qa-report .qa-tabbar { gap: 0 16px; } .qa-report .qa-tab { font-size: 12.5px; } }
+/* 动画被禁用时不能让 section 卡在 opacity:0（入场动画是 forwards 的）。 */
+@media (prefers-reduced-motion: reduce) { .qa-report section { opacity: 1; transform: none; animation: none; } }
+"""
 
-def _html_masthead(report: dict[str, Any], lang: str) -> str:
+_TAB_SLOTS = 6
+_CSS_COMPONENTS += "".join(
+    f".qa-report .qa-tabs > .qa-tabsel:nth-of-type({i}):checked ~ .qa-panes > .qa-pane:nth-of-type({i}) {{ display: block; }}\n"
+    f".qa-report .qa-tabs > .qa-tabsel:nth-of-type({i}):checked ~ .qa-tabbar > .qa-tab:nth-of-type({i}) "
+    "{ color: var(--orange-deep); border-bottom-color: var(--orange); }\n"
+    for i in range(1, _TAB_SLOTS + 1)
+)
+
+
+# 走势图的 hover 读数。渐进增强：脚本跑不起来（宿主用 innerHTML 注入片段、或 CSP 禁内联
+# 脚本）时，静态坐标轴照常显示，只是少了跟随鼠标的读数。价格由 polyline 的 y 坐标反算，
+# 因此不必为 9000 多个点各存一份数值 —— 那会让 artifact 体积翻三倍。
+_CHART_HOVER_JS = (
+    "<script>(function(){var H=__H__,P=__P__,W=__W__,last=null;"
+    'function el(c,k){var e=c.querySelector("."+k);if(!e){e=document.createElement("div");'
+    "e.className=k;c.appendChild(e);}return e;}"
+    'function hide(c){if(!c||!c._on)return;c._on=false;["dp-cursor","dp-dot","dp-tip"]'
+    '.forEach(function(k){var e=c.querySelector("."+k);if(e)e.hidden=true;});}'
+    "function data(c){if(c._d)return c._d;"
+    'var raw=(c.dataset.v||"").split("|"),v=[+raw[0]];'
+    'if(raw[1])raw[1].split(",").forEach(function(d){v.push(v[v.length-1]+(+d));});'
+    "var lo=Math.min.apply(null,v),hi=Math.max.apply(null,v),s=(hi-lo)||1;"
+    "c._d={v:v,y:v.map(function(p){return H-P-(p-lo)/s*(H-2*P);})};return c._d;}"
+    'document.addEventListener("mousemove",function(e){'
+    'var t=e.target,c=t&&t.closest?t.closest(".dp-chart"):null;'
+    "if(c!==last){hide(last);last=c;}if(!c)return;"
+    "var d=data(c);if(d.v.length<2)return;"
+    'var svg=c.querySelector(".dp-svg"),r=svg.getBoundingClientRect();if(!r.width)return;'
+    "var f=Math.min(1,Math.max(0,(e.clientX-r.left)/r.width));"
+    "var i=Math.round(f*(d.v.length-1));"
+    "var px=i/(d.v.length-1)*r.width,py=d.y[i]/H*r.height;"
+    'var cur=el(c,"dp-cursor"),dot=el(c,"dp-dot"),tip=el(c,"dp-tip");'
+    'cur.style.left=px+"px";cur.hidden=false;'
+    'dot.style.left=px+"px";dot.style.top=py+"px";dot.hidden=false;'
+    'tip.textContent="$"+(d.v[i]/100).toFixed(2);'
+    'tip.style.left=Math.min(Math.max(px,34),Math.max(34,r.width-34))+"px";'
+    'tip.style.top=py+"px";tip.hidden=false;c._on=true;});'
+    'document.addEventListener("mouseleave",function(){hide(last);last=null;});})();</script>'
+).replace("__H__", str(_CHART_H)).replace("__P__", str(_CHART_PAD)).replace("__W__", str(_CHART_W))
+
+
+def _hover_script(report: dict[str, Any]) -> str:
+    return _CHART_HOVER_JS if report.get("detail_charts") else ""
+
+
+def _html_metabar(report: dict[str, Any], lang: str) -> str:
     status = str(report.get("data_status"))
     status_cls = "ok" if status == "ok" else "bad"
     overview = report.get("market_overview") or {}
     sample_count = overview.get("symbols_analyzed", report.get("universe_size", 0))
     na = tr("unavailable", "不可用", lang)
-    title_main = tr("Daily US Equity Research Brief", "今日美股研究简报", lang)
-    return f"""<header>
-  <div class="kicker">Daily US Equity Briefing · {tr('US market research', '美股每日研究', lang)}</div>
-  <h1 class="title">{title_main}<span class="en">A quantitative reading of today's US market</span></h1>
-  <div class="metabar">
+    return f"""<div class="metabar">
     <span class="pill">{tr('Data as of', '数据截止', lang)} <b>{_esc(report.get('as_of_date') or na)}</b></span>
     <span class="pill {status_cls}">{tr('Status', '状态', lang)} <b>{_esc(status)}</b></span>
     <span class="pill">{tr('Generated', '生成', lang)} (UTC) <b>{_esc(str(report.get('generated_at'))[:19])}</b></span>
     <span class="pill">{tr('Sample', '样本', lang)} <b>{_esc(sample_count)}</b></span>
-  </div>
+  </div>"""
+
+
+def _html_masthead(report: dict[str, Any], lang: str) -> str:
+    title_main = tr("Daily US Equity Research Brief", "今日美股研究简报", lang)
+    return f"""<header>
+  <div class="kicker">Daily US Equity Briefing · {tr('US market research', '美股每日研究', lang)}</div>
+  <h1 class="title">{title_main}<span class="en">A quantitative reading of today's US market</span></h1>
+  {_html_metabar(report, lang)}
 </header>
 <div class="ribbon">{_esc(report.get('disclaimer', ''))}</div>"""
+
+
+def render_report_body(report: dict[str, Any]) -> str:
+    """报告正文，供别的页面内嵌（不含文档外壳、样式和大标题）。
+
+    带上 metabar 和免责声明 —— 数据截止日和免责声明必须跟着报告内容走，宿主页面自己的
+    页眉说明不了这两件事。内嵌时报告自带的标签页用 ``qa`` 组名，宿主必须换一个组名。
+    """
+    lang = normalize_language(report.get("language", "en"))
+    return (
+        f'<div class="metawrap">{_html_metabar(report, lang)}</div>'
+        f'<div class="ribbon">{_esc(report.get("disclaimer", ""))}</div>'
+        f"{_html_sections(report, lang)}{_hover_script(report)}"
+    )
 
 
 def _html_footer(report: dict[str, Any], lang: str) -> str:
@@ -1669,22 +1714,80 @@ def _html_footer(report: dict[str, Any], lang: str) -> str:
 
 
 def _html_sections(report: dict[str, Any], lang: str) -> str:
+    """把 section 分组进标签页。
+
+    组内顺序与全局章节编号沿用原来的线性排列（持仓永远排最前），所以编号跨标签页仍然连续。
+    空 section 不消耗编号，整组为空时该标签页直接不出现。
+    """
     n = _SectionCounter()
-    body = [
-        _html_holdings(report, n, lang),  # 用户最关心自己的钱：持仓永远排最前
-        _html_holding_profiles(report, n, lang),  # 紧跟持仓：每只票的判断材料
-        _html_overview(report, n, lang),
-        _html_funds(report, n, lang),
-        _html_narrative(report, n, lang),
-        _html_reco(report, n, lang),
-        _html_table(report, "buy_candidates", tr("Potential picks", "潜力股", lang), n, lang),
-        _html_table(report, "high_risk", tr("High risk", "高风险", lang), n, lang),
-        _html_news(report, n, lang),
-        _html_company(report, n, lang),
-        _html_social(report, n, lang),
-        _html_notes(report, n, lang),
+    groups = [
+        # 用户最关心自己的钱：持仓组永远排最前，也是默认打开的那页。
+        (tr("Holdings", "持仓", lang), [
+            _html_holdings(report, n, lang),
+            _html_holding_profiles(report, n, lang),  # 紧跟持仓：每只票的判断材料
+        ]),
+        (tr("Market", "大盘", lang), [
+            _html_overview(report, n, lang),
+            _html_funds(report, n, lang),
+        ]),
+        (tr("Ideas", "机会", lang), [
+            _html_reco(report, n, lang),
+            _html_table(report, "buy_candidates", tr("Potential picks", "潜力股", lang), n, lang),
+            _html_table(report, "high_risk", tr("High risk", "高风险", lang), n, lang),
+        ]),
+        (tr("News", "资讯", lang), [
+            _html_news(report, n, lang),
+            _html_company(report, n, lang),
+            _html_social(report, n, lang),
+        ]),
+        (tr("Notes", "说明", lang), [
+            _html_notes(report, n, lang),
+        ]),
     ]
-    return "\n".join(block for block in body if block)
+    filled = [(title, blocks) for title, blocks in ((t, [b for b in bs if b]) for t, bs in groups) if blocks]
+    if not filled:
+        return ""
+    if len(filled) == 1:
+        return "\n".join(filled[0][1])  # 只剩一组时不值得为它画一条标签栏
+    return build_tabs(filled)
+
+
+def report_css(*, web_fonts: bool = True, page: bool = True) -> str:
+    """整页文档用的完整 CSS（调色板 + 字体 + 组件）。
+
+    控制台复用它，好让运维页和报告长成同一套视觉，而不是各写一份。
+    """
+    fonts = _CSS_FONTS_WEB if web_fonts else _CSS_FONTS_SYSTEM
+    return f":root {{ {_CSS_PALETTE_LIGHT}{fonts} }}\n" + (_CSS_PAGE if page else "") + _CSS_COMPONENTS
+
+
+def build_tabs(groups: list[tuple[str, list[str]]], group: str = "qa") -> str:
+    """radio + label 纯 CSS 标签页（无 JS，严格 CSP 下也能切换）。
+
+    与 `.dp` 详情面板同一套路：显示靠 ``:checked ~ nth-of-type`` 配对，是相对各自
+    ``.qa-tabs`` 的，所以嵌套一层也能各切各的。但 radio 的 ``name`` 是全局互斥的 ——
+    宿主页面把带标签页的报告嵌进自己的标签页时，两层必须用不同的 ``group``，否则选中
+    一个会把另一层的选中态清掉。分组数不能超过 _TAB_SLOTS，否则多出来的页没有对应的
+    :checked 规则、点了打不开。
+    """
+    if len(groups) > _TAB_SLOTS:
+        # 静默失效很难查（点了没反应也不报错），宁可在渲染时就炸。
+        raise ValueError(f"标签页最多 {_TAB_SLOTS} 组，收到 {len(groups)} 组；请同步调整 _TAB_SLOTS")
+    inputs: list[str] = []
+    tabs: list[str] = []
+    panes: list[str] = []
+    for idx, (title, blocks) in enumerate(groups, start=1):
+        checked = " checked" if idx == 1 else ""
+        input_id = f"{group}-tab-{idx}"
+        inputs.append(f'<input class="qa-tabsel" type="radio" name="{group}-tabsel" id="{input_id}"{checked}>')
+        count = f'<span class="qa-tab-n">{len(blocks)}</span>' if len(blocks) > 1 else ""
+        tabs.append(f'<label class="qa-tab" for="{input_id}">{_esc(title)}{count}</label>')
+        panes.append(f'<div class="qa-pane">{"".join(blocks)}</div>')
+    return (
+        f'<div class="qa-tabs">{"".join(inputs)}'
+        f'<nav class="qa-tabbar">{"".join(tabs)}</nav>'
+        f'<div class="qa-panes">{"".join(panes)}</div></div>'
+    )
 
 
 def render_html(report: dict[str, Any]) -> str:
@@ -1707,6 +1810,7 @@ def render_html(report: dict[str, Any]) -> str:
 {_html_sections(report, lang)}
 {_html_footer(report, lang)}
 </div>
+{_hover_script(report)}
 </body>
 </html>
 """
@@ -1734,6 +1838,7 @@ def render_artifact_html(report: dict[str, Any]) -> str:
         f"{_html_masthead(report, lang)}"
         f"{_html_sections(report, lang)}"
         f"{_html_footer(report, lang)}"
+        f"{_hover_script(report)}"
         "</div>"
     )
 
@@ -1808,23 +1913,62 @@ def _sparkline_svg(values: list[float], width: int = 72, height: int = 24) -> st
     )
 
 
-def _detail_chart_svg(points: list[float], width: int = 640, height: int = 150) -> str:
+def _detail_chart_svg(points: list[float], width: int = _CHART_W, height: int = _CHART_H) -> str:
     """Inline SVG close-price curve with a soft area fill (self-contained, no chart library)."""
     lo, hi = min(points), max(points)
     span = hi - lo or 1.0
     step = width / (len(points) - 1)
-    pad = 6  # 上下留白，避免曲线贴边
+    pad = _CHART_PAD
     coords = [(i * step, height - pad - (v - lo) / span * (height - 2 * pad)) for i, v in enumerate(points)]
     # 坐标取整：点串在文档里出现两次（描边 + 面积填充），是 artifact HTML 的体积大头。
     # viewBox 仍是 640×150 且约按 1:1 显示，取整误差 ≤0.5px、线宽 1.8px —— 视觉无损。
+    # （hover 读数不从这里反算 —— 150px 的分辨率在大价差上会差出几角钱，见 _detail_chart_block。）
     pts = " ".join(f"{round(x)},{round(y)}" for x, y in coords)
     color = "var(--green)" if points[-1] >= points[0] else "var(--down)"
     area = f"0,{height} {pts} {width},{height}"
+    grid = "".join(
+        f'<line class="dp-grid" x1="0" y1="{y:g}" x2="{width}" y2="{y:g}"/>'
+        for y in (pad, height / 2, height - pad)
+    )
     return (
         f'<svg class="dp-svg" viewBox="0 0 {width} {height}" preserveAspectRatio="none" aria-hidden="true">'
+        f"{grid}"
         f'<polygon points="{area}" fill="{color}" opacity="0.08"/>'
         f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.8" '
         'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    )
+
+
+def _md_day(value: Any) -> str:
+    """``YYYY-MM-DD`` -> ``MM-DD``，横轴刻度用（年份在 caption 的完整日期里已经有了）。"""
+    text = str(value or "")
+    return text[5:] if len(text) == 10 else text
+
+
+def _detail_chart_block(window: dict[str, Any]) -> str:
+    """走势图 + 坐标轴 + hover 读数的数据。
+
+    坐标轴文字走 HTML 层而不是 SVG ``<text>``：SVG 用 ``preserveAspectRatio="none"`` 横向
+    拉伸填满容器，窄屏下 SVG 文字会被压扁，HTML 层不受影响。
+
+    ``data-v`` 是这条曲线的收盘价（分为单位的整数，逐点差分）。曾经想省掉它、让脚本从
+    polyline 的 y 坐标反算价格，但 150px 高的图在大价差上分辨率不够 —— 千元股能差出三毛
+    多。差分编码后每点两三个字符，比存原值省一半。游标/圆点/气泡由脚本按需创建，不预先
+    为 140 张图各写三个空 div。
+    """
+    points = window.get("points") or []
+    if len(points) < 2:
+        return ""
+    lo, hi = min(points), max(points)
+    cents = [round(v * 100) for v in points]
+    deltas = ",".join(str(b - a) for a, b in zip(cents[:-1], cents[1:], strict=True))
+    y_axis = "".join(f"<span>{_fmt_money(p)}</span>" for p in (hi, (hi + lo) / 2, lo))
+    x_axis = "".join(f"<span>{_esc(_md_day(window.get(k)))}</span>" for k in ("start", "mid", "end"))
+    return (
+        f'<div class="dp-chart" data-v="{cents[0]}|{deltas}">'
+        f"{_detail_chart_svg(points)}"
+        f'<div class="dp-ay">{y_axis}</div></div>'
+        f'<div class="dp-ax">{x_axis}</div>'
     )
 
 
@@ -1853,7 +1997,7 @@ def _detail_panel_html(symbol: str, charts: dict[str, Any], uid: str, lang: str)
             f'<span>{_delta(w.get("chg_pct"))}</span>'
             f'<span>{_esc(tr("range", "区间", lang))} ${w["low"]:,.2f}–${w["high"]:,.2f}</span>'
         )
-        panes.append(f'<div class="dp-pane">{_detail_chart_svg(w["points"])}<div class="dp-caption">{caption}</div></div>')
+        panes.append(f'<div class="dp-pane">{_detail_chart_block(w)}<div class="dp-caption">{caption}</div></div>')
     return (
         f'<div class="dp">{"".join(inputs)}'
         f'<div class="dp-tabs">{"".join(tabs)}</div>'
@@ -1946,13 +2090,6 @@ def _html_overview(report: dict[str, Any], n: _SectionCounter, lang: str = "en")
         for label, value in tiles
     )
     return f'<section>{_sec_head(n.next(), tr("Market overview", "市场概览", lang))}<div class="tiles">{cells}</div></section>'
-
-
-def _html_narrative(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
-    narrative = report.get("llm_narrative")
-    if not narrative:
-        return ""
-    return f'<section>{_sec_head(n.next(), tr("AI synthesis", "AI 综合分析", lang), "model synthesis")}<div class="narrative">{_esc(narrative)}</div></section>'
 
 
 def _hp_news_html(profile: dict[str, Any], lang: str) -> str:

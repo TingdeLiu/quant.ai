@@ -43,7 +43,6 @@ def _write_config(tmp_path: Path) -> str:
                 "report:",
                 "  output_dir: reports",
                 "market_intel:",
-                "  use_llm: false",
                 "  news_feeds: []",
                 "  social_enabled: false",
                 # 个股新闻走 yfinance 网络，不受 news_feeds=[] 约束 —— 置 0 才是真离线。

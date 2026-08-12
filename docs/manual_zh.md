@@ -8,7 +8,7 @@
 
 `quant.ai` 是一个美股日线量化研究与回测 agent 原型。当前版本已经打通从数据读取、信号生成、组合构建、风险检查、回测评估、ML ranking、报告输出、纸面订单计划、本地 dashboard、API token 认证到操作审计日志的基础闭环，并通过 MCP 内嵌进 Claude/Codex：对话式管理自选池与持仓，每日报告开头即你的持仓盈亏，报告以 Claude 风格 HTML artifact 呈现。
 
-这个项目的定位是研究和验证，不是实盘交易系统。不会提交真实订单，也不提供任何下单/审批链路；AI/LLM 只用于研究审阅、报告解释和风险提示，不直接生成 broker order。持仓是用户口述的记账数据，仅用于研究上下文。
+这个项目的定位是研究和验证，不是实盘交易系统。不会提交真实订单，也不提供任何下单/审批链路。项目自身不调用任何 LLM API，只产出可核对的量化事实与规则评级；综合解读交给挂载 MCP 的 AI 客户端。持仓是用户口述的记账数据，仅用于研究上下文。
 
 ## 项目已经完成了什么
 
@@ -78,7 +78,7 @@
 
 ### 每日美股市场情报报告
 
-- 在控制台点击「生成今日美股分析报告」按钮，或运行 `market-report` 命令，即可生成一份当日美股研究简报。
+- 在控制台「运行」页点「生成今日报告」按钮，或运行 `market-report` 命令，即可生成一份当日美股研究简报。
 - 数据来源为免费、无需 API key 的公开渠道：
   - 财经媒体 RSS 头条（默认 Yahoo Finance、CNBC、MarketWatch、Investing.com）。
   - 重点个股最新资讯（基于 yfinance 个股新闻）。
@@ -88,26 +88,24 @@
   - 「高风险」标的：已现急跌/深回撤/高波动，或处于 52 周高点附近且近月涨幅偏多、当前市况下容易回撤的。
   - 「基金/指数追踪」：固定跟踪纳斯达克100（QQQ）、标普500（SPY）、半导体（SMH）、人工智能（AIQ），与个人 universe 无关，始终展示。
   - 按持有周期的研究推荐（长线 / 中线 / 短线）。
-- 当 `llm.enabled` 且配置了 API key 时，会用大模型把新闻和量化数据综合成自然语言分析；否则回落到结构化模板，无需任何 key 也能用。
+- 报告只输出结构化事实，不含模型生成的叙述段：项目自身不调用任何 LLM API，综合解读交给挂载 MCP 的 AI 客户端。
 - 输出文件：`market_intel.json`、`market_intel.md`、`market_intel.html`、`market_intel_artifact.html`（自包含、明暗双主题，供 Claude 直接渲染为 artifact）。
 - HTML 报告采用 Anthropic / Claude 品牌视觉（暖米白底、赤陶橙点缀、Poppins 标题 + Lora 正文、绿涨橙红跌）；设有持仓时报告置顶「我的持仓」盈亏段，每个仓位带最近走势折线图（内联 SVG）；核心板块为「按持有周期的研究推荐」（长线 / 中线 / 短线），每只标的代码后带中文名（收录常见标的，未收录则只显示代码，「潜力股」「高风险」「我的持仓」「重点个股资讯」等板块同样带中文名）、以机构分析师目标价为中心（0点）的偏离条——现价低于目标居左显绿、高于目标居右显红，条形两端对应分析师最低/最高估值，无覆盖时显示占位文案而非误导性的条、当日涨跌值与百分比，命中个人持仓的标的置顶（榜首）并标注股数与盈亏。
 - 严格定位为研究，不构成投资建议，也不会生成任何下单指令或实盘授权。
 
-### Markets 实时分析仪表盘
+### 行情视图
 
-- 本地服务提供一个交互式仪表盘 `/markets`，使用 Claude Design 导出的 Tyndall Markets 设计（Anthropic 品牌设计系统），由 React 在浏览器内渲染。
-- 包含：股票搜索、价格图、关键指标、AI 分析师面板（评级 + 摘要 + 多空论点 + 追问输入框）、自选股和每日简报。
-- 全部内容由项目真实量化数据驱动（`/api/markets-data`）：评级、摘要、多空论点均从横截面信号和价格统计派生；无外部 key、无下单能力，纯研究展示。
-- 设计文件 vendored 在 `quant_agent/web/`，相对路径结构保持原样，因此该 UI 在 Claude Design 中也能独立打开（缺少真实数据时回落到内置占位数据）。
+- 控制台 `/` 的「行情」标签页：每日简报 + 全部关注标的的价格、当日涨跌、研究读数与摘要。
+- 数据同源于 `markets_data.py`（也是 MCP 工具 `quant_get_markets_data` 和 `/api/markets-data` 的来源）：评级、摘要、多空论点均从横截面信号和价格统计派生；无外部 key、无下单能力，纯研究展示。
+- 个股走势图在「报告」标签页里 —— 1W 到 5Y 五档、带坐标轴、鼠标划过显示对应收盘价。
+- 早期有一个 React 版的 `/markets` 交互式仪表盘（Claude Design 导出的 Tyndall Markets 设计，靠 CDN 加载 React/Babel 运行时编译 JSX），因为数据与结论和上面完全同源、图表还不如报告里的，已整个删除；地址保留 301 重定向到 `/`。那套设计 token 与品牌资源移到了 `reference/design-tokens/` 作为视觉参考。
 
-### LLM 研究审阅基础版
+### 研究审阅
 
-- 默认使用离线模板审阅，不需要 API key 也能运行。
-- 可选 OpenAI-compatible chat completions client。
-- 缺少 API key 或请求失败时自动回落离线模板。
-- 保存 prompt version、model、input hash、output hash 等元数据。
-- 明确限制 LLM 只做研究摘要、风险提示、因子假设和异常检查建议。
-- 拦截明显 broker/order 指令化输出。
+- 使用确定性模板生成审阅：给出 verdict、关键指标表、风控检查清单和数据局限提示。
+- 不需要 API key，输出可复现、可核对，不受模型波动影响。
+- 项目不调用任何 LLM API —— 需要自然语言综合时，在挂载 MCP 的 AI 客户端里就着这些数据讨论。
+- 审阅只做解释，绝不产生 broker/order 指令或实盘授权。
 
 ### 数据质量、告警和通知
 
@@ -200,14 +198,13 @@ quant.ai/
     metrics.py                 绩效指标
     optimization.py            信号权重搜索和 walk-forward
     ml.py                      ML ranking signal
-    llm.py                     LLM 审阅 client
     paper.py                   纸面订单计划
     holdings.py                聊天管理的自选/持仓存储与盈亏快照
     market_intel.py            每日市场报告（MD/HTML/artifact 渲染）
     mcp_server.py              MCP server（Claude/Codex 集成入口）
     alerts.py                  告警
     notifications.py           通知 outbox/webhook
-    dashboard.py               静态 dashboard 生成
+    console.py                 统一控制台（报告/行情/回测/运行 四标签页）+ 存档诊断页
     server.py                  本地 dashboard 服务
     reports.py                 报告输出
   configs/
@@ -353,7 +350,7 @@ quant-ai analyze --file watchlist.txt                  # 从自选股文件读�
 quant-ai analyze AAPL --output-dir reports/analyze     # 导出 md+json
 quant-ai analyze AAPL --output-dir reports/analyze --chart  # 额外导出价格+均线+RSI 的 PNG
 quant-ai analyze AAPL --json                           # 仅 JSON，便于脚本调用
-quant-ai analyze AAPL --config configs/default.yaml    # 附带 AI 综合解读（需配置 LLM）
+quant-ai analyze AAPL --output-dir reports/analyze    # 把分析写成 json + md
 ```
 
 > 未安装命令入口时，把上面的 `quant-ai` 换成 `python -m quant_agent` 即可，效果相同。
@@ -518,13 +515,15 @@ GET  /api/market-report/status
 POST /api/market-report
 GET  /market-report
 GET  /api/markets-data
-GET  /markets
-GET  /m/<asset>
 POST /api/run
-GET  /dashboard
 GET  /report/<file>
 GET  /runs/<run_id>/dashboard
 ```
+
+`/` 是**唯一的页面**，四个标签页：**报告 / 行情 / 回测 / 运行**。原来的 `/console`（运维）、
+`/dashboard`（回测诊断）、`/markets`（React 行情）都已并进来，三个地址连同 `/m/<asset>`
+一律 301 重定向到 `/`。页面语言由 `config.language` 决定 —— 旧控制台那套客户端中英切换
+按钮（带独立 i18n 字典）已删除，全项目统一走 `tr()`。
 
 ## 集成到 Claude（MCP）
 
@@ -718,30 +717,6 @@ ml:
   feature_version: technical_v1
 ```
 
-### LLM 审阅
-
-默认关闭：
-
-```yaml
-llm:
-  enabled: false
-  provider: openai-compatible
-  model: gpt-4.1-mini
-  endpoint: null
-  api_key_env: OPENAI_API_KEY
-  prompt_version: research_review_v1
-```
-
-启用时：
-
-```yaml
-llm:
-  enabled: true
-  api_key_env: OPENAI_API_KEY
-```
-
-如果没有设置 API key，系统会回落到离线模板审阅。
-
 ### Dashboard 安全
 
 `configs/full_roadmap.yaml` 当前配置：
@@ -869,7 +844,7 @@ python -m compileall -q quant_agent tests
 - 还没有完整基本面、新闻、财报电话会或 SEC filing 数据。
 - 当前回测是研究级 close-to-close 模型，不是生产级事件驱动撮合。
 - ML ranking 是基础版，没有模型注册中心、特征存储服务或漂移监控。
-- LLM 审阅是基础版，没有多 provider 路由。
+- 研究审阅是确定性模板，项目按定位不接入任何 LLM API；需要自然语言综合时在 AI 客户端里做。
 - 纸面订单计划是研究模拟，项目按定位不接入任何 broker API 或下单/审批链路。
 - Dashboard 已有本地 API token 认证和操作审计，但不是多用户权限系统。
 - 通知 outbox 和 webhook 是基础版，没有生产级投递重试、签名校验和告警升级策略。
@@ -882,7 +857,7 @@ python -m compileall -q quant_agent tests
 4. 增加 dashboard 多用户权限、会话管理和更细粒度的操作审计。
 5. 增加通知投递保障，包括 webhook 签名、重试、死信和告警升级。
 6. 为 ML 增加模型注册、特征存储、漂移监控和可重复训练任务。
-7. 为 LLM 审阅增加多 provider 路由、人工确认和更强的安全策略。
+7. 扩充 MCP 工具面，让 AI 客户端能取到更细粒度的研究数据。
 
 ## 重要声明
 

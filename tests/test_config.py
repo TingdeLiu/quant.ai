@@ -87,7 +87,6 @@ def test_optional_roadmap_configs_are_parsed(tmp_path: Path) -> None:
         {
             "data": {"source": "csv", "csv_path": str(tmp_path / "prices.csv"), "universe": ["SPY"]},
             "ml": {"enabled": True, "prediction_horizon_days": 10},
-            "llm": {"enabled": True, "model": "test-model", "api_key_env": "TEST_API_KEY"},
             "paper_trading": {"enabled": True, "account_value": 123000, "max_order_notional": 12000},
             "dashboard": {
                 "enabled": True,
@@ -109,7 +108,6 @@ def test_optional_roadmap_configs_are_parsed(tmp_path: Path) -> None:
     )
     assert config.ml.enabled
     assert config.ml.prediction_horizon_days == 10
-    assert config.llm.model == "test-model"
     assert config.paper_trading.account_value == 123000
     assert config.dashboard.output_path == tmp_path / "reports/current/dashboard.html"
     assert config.dashboard.service_dir == tmp_path / "reports/service"

@@ -41,7 +41,6 @@ def test_analyze_markdown_and_clean_symbols() -> None:
     payload = {
         "as_of": "2026-01-01 09:00",
         "results": [_analyze_one_dict()],
-        "narrative": None,
         "disclaimer": "测试免责声明",
     }
     text = render_markdown(payload)
@@ -67,7 +66,6 @@ def test_render_chart_and_write_analysis_with_charts(tmp_path) -> None:
         "as_of": "2026-01-01",
         "symbols": ["UP"],
         "results": [result.to_dict()],
-        "narrative": None,
         "disclaimer": "x",
         "_objects": [result],
     }

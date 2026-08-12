@@ -72,20 +72,10 @@ ml:
   model_version: ridge_v1
   feature_version: technical_v1
 
-llm:
-  enabled: false
-  provider: openai-compatible
-  model: gpt-4.1-mini
-  endpoint: null
-  api_key_env: OPENAI_API_KEY
-  prompt_version: research_review_v1
-
 market_intel:
   enabled: true
   # 留空则写入 report.output_dir，便于 dashboard 文件列表直接展示
   output_dir: reports/full_roadmap/current
-  # 当 llm.enabled 且配置了 api_key 时，会用大模型把新闻+量化数据综合成叙述；否则回落结构化模板
-  use_llm: true
   max_news_items: 24
   symbol_news_count: 8
   max_symbol_news: 3

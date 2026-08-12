@@ -1,42 +1,16 @@
 from __future__ import annotations
 
-import json
 from typing import Any
-
-from quant_agent.config import LLMConfig
-from quant_agent.llm import generate_llm_review
 
 
 class ResearchReviewAgent:
-    """Template-based reviewer; it never emits broker/order instructions."""
+    """Template-based reviewer; it never emits broker/order instructions.
+
+    这里刻意不接任何 LLM API：本项目通过 MCP 挂在 AI 客户端里用，综合与解读由宿主模型
+    完成，服务端只负责产出可核对的结构化事实。
+    """
 
     def review(self, metrics: dict[str, float], risk_checks: list[dict[str, object]]) -> str:
-        review, _ = self.review_with_metadata(metrics, risk_checks, None)
-        return review
-
-    def review_with_metadata(
-        self,
-        metrics: dict[str, float],
-        risk_checks: list[dict[str, object]],
-        llm_config: LLMConfig | None,
-        context: dict[str, Any] | None = None,
-    ) -> tuple[str, dict[str, Any]]:
-        offline_review = self._offline_review(metrics, risk_checks)
-        prompt = _review_prompt(metrics, risk_checks, context or {})
-        llm_text, llm_metadata = generate_llm_review(llm_config, prompt) if llm_config else (None, {"enabled": False})
-        if not llm_text:
-            return offline_review, {"mode": "offline_template", "llm": llm_metadata}
-        return (
-            offline_review
-            + "\n"
-            + "## LLM Research Commentary\n\n"
-            + llm_text.strip()
-            + "\n\n"
-            + "This LLM commentary is explanatory only and does not authorize paper or live trading.\n",
-            {"mode": "llm_augmented", "llm": llm_metadata},
-        )
-
-    def _offline_review(self, metrics: dict[str, float], risk_checks: list[dict[str, object]]) -> str:
         passed = all(bool(check["passed"]) for check in risk_checks)
         risk_lines = "\n".join(
             f"- [{'x' if check['passed'] else ' '}] {check['code']}: {check['message']}" for check in risk_checks
@@ -65,16 +39,9 @@ class ResearchReviewAgent:
             "- Promote a strategy only after walk-forward testing and paper trading infrastructure exist.\n"
         )
 
-
-def _review_prompt(metrics: dict[str, float], risk_checks: list[dict[str, object]], context: dict[str, Any]) -> str:
-    payload = {
-        "metrics": metrics,
-        "risk_checks": risk_checks,
-        "context": context,
-        "constraints": [
-            "Research commentary only.",
-            "Do not produce broker orders or trading instructions.",
-            "Focus on risks, anomalies, and validation gaps.",
-        ],
-    }
-    return json.dumps(payload, indent=2, default=str)
+    def review_with_metadata(
+        self,
+        metrics: dict[str, float],
+        risk_checks: list[dict[str, object]],
+    ) -> tuple[str, dict[str, Any]]:
+        return self.review(metrics, risk_checks), {"mode": "offline_template"}

@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from quant_agent.config import DataConfig, LLMConfig
+from quant_agent.config import DataConfig
 from quant_agent.data import load_prices
 from quant_agent.i18n import DEFAULT_LANGUAGE, normalize_language, tr
 
@@ -106,10 +106,13 @@ def analyze_symbols(
     symbols: list[str],
     lookback_days: int = 600,
     cache_dir: Path | None = None,
-    llm_config: LLMConfig | None = None,
     language: str = DEFAULT_LANGUAGE,
 ) -> dict[str, Any]:
-    """分析一组标的，返回结构化结果（含可选的 LLM 自然语言综述）。"""
+    """分析一组标的，返回结构化结果。
+
+    只产出可核对的量化事实与规则评级；自然语言综述交给宿主 AI 客户端，本项目不调用任何
+    LLM API。
+    """
     lang = normalize_language(language)
     cleaned = _clean_symbols(symbols)
     if not cleaned:
@@ -145,14 +148,11 @@ def analyze_symbols(
             continue
         results.append(_analyze_one(symbol, group.sort_values("date"), language=lang))
 
-    narrative, narrative_meta = _maybe_narrative(results, llm_config, lang)
     return {
         "as_of": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "language": lang,
         "symbols": cleaned,
         "results": [r.to_dict() for r in results],
-        "narrative": narrative,
-        "narrative_meta": narrative_meta,
         "disclaimer": _disclaimer(lang),
         "_objects": results,
     }
@@ -339,40 +339,6 @@ def _key_levels(
         "ma20": round(ma20, 2) if ma20 else None,
         "ma50": round(ma50, 2) if ma50 else None,
     }
-
-
-def _maybe_narrative(
-    results: list[SymbolAnalysis], llm_config: LLMConfig | None, lang: str = DEFAULT_LANGUAGE
-) -> tuple[str | None, dict[str, Any]]:
-    if llm_config is None or not llm_config.enabled:
-        return None, {"status": "disabled"}
-    ok_results = [r for r in results if r.ok]
-    if not ok_results:
-        return None, {"status": "no_data"}
-    lines = []
-    for r in ok_results:
-        m = r.metrics
-        lines.append(
-            f"{r.symbol}: rating={r.rating} score={r.composite:+.2f} price={r.price} "
-            f"1M={m.get('ret_1m')} 3M={m.get('ret_3m')} momentum={m.get('momentum_12_1')} "
-            f"RSI={m.get('rsi_14')} ann_vol={m.get('vol_annual')}; reasons: {'; '.join(r.reasons)}"
-        )
-    prompt = tr(
-        "Below are quantitative technical indicators and rule-based ratings for several US "
-        "stocks. Write a concise English summary for an ordinary investor: the trend and risk "
-        "of each name, a watch idea (e.g. buy on dips / wait / manage risk), and make clear this "
-        "is research analysis, not investment advice. Do not fabricate prices or fundamentals.\n\n",
-        "以下是若干美股标的的量化技术指标和规则评级。请用简洁中文为普通投资者写一段综合解读，"
-        "说明每只标的的趋势与风险，给出关注思路（如逢低关注/观望/控制风险），"
-        "并明确这是研究分析而非投资建议。不要编造价格或基本面信息。\n\n",
-        lang,
-    ) + "\n".join(lines)
-    try:
-        from quant_agent.llm import generate_market_narrative
-
-        return generate_market_narrative(llm_config, prompt)
-    except Exception as exc:  # pragma: no cover - LLM 可选
-        return None, {"status": "error", "error": str(exc)}
 
 
 _NETWORK_HINTS = (
@@ -643,11 +609,6 @@ def render_markdown(payload: dict[str, Any]) -> str:
             f"- {tr('Key levels', '参考关注位', lang)}: {tr('support', '支撑', lang)} {levels.get('reference_support')} ｜ "
             f"{tr('stop', '参考止损', lang)} {levels.get('reference_stop')}"
         )
-        lines.append("")
-    if payload.get("narrative"):
-        lines.append(f"## {tr('AI summary', 'AI 综合解读', lang)}")
-        lines.append("")
-        lines.append(payload["narrative"])
         lines.append("")
     lines.append(f"> {payload['disclaimer']}")
     return "\n".join(lines)

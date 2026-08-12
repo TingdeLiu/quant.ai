@@ -8,7 +8,7 @@ from quant_agent.agents import ResearchReviewAgent
 from quant_agent.alerts import build_alerts, write_alerts
 from quant_agent.backtest import run_backtest
 from quant_agent.config import AppConfig
-from quant_agent.dashboard import write_dashboard
+from quant_agent.console import write_dashboard
 from quant_agent.data import load_prices
 from quant_agent.data_quality import build_data_quality_report, write_data_quality_report
 from quant_agent.features import SIGNAL_COLUMNS, build_signals
@@ -62,12 +62,7 @@ def run_research_backtest(config: AppConfig) -> dict[str, object]:
         predictions["feature_version"] = config.ml.feature_version
         predictions["generated_at"] = generated_at
         result["ml_predictions"] = predictions
-    review, review_metadata = ResearchReviewAgent().review_with_metadata(
-        result["metrics"],
-        risk_checks,
-        config.llm,
-        context={"ml": ml_diagnostics, "data_quality": data_quality.get("summary", {})},
-    )
+    review, review_metadata = ResearchReviewAgent().review_with_metadata(result["metrics"], risk_checks)
     result["review_metadata"] = review_metadata
     if config.paper_trading.enabled:
         paper_plan = build_paper_order_plan(targets, prices, config.paper_trading)

@@ -86,10 +86,14 @@ def test_full_pipeline_writes_expected_outputs(tmp_path: Path) -> None:
     assert not result["recommendations"].empty
     assert "equal_weight_total_return" in result["metrics"]
     assert "excess_vs_equal_weight" in result["metrics"]
+    # 存档的回测诊断页：语言由 config.language 服务端渲染（原来那套客户端切换按钮 + 独立
+    # i18n 字典已随 dashboard.py 一起删掉，全项目统一走 tr()）。
     dashboard = (tmp_path / "reports" / "dashboard.html").read_text(encoding="utf-8")
     assert '<html lang="en">' in dashboard  # English by default
-    assert "setLanguage('zh')" in dashboard  # bilingual switcher still present
-    assert "研究买入候选" in dashboard  # zh translations embedded for the toggle
+    assert "Research candidates" in dashboard and "研究候选" not in dashboard
+    assert "Key metrics" in dashboard
+    assert "qa-report" in dashboard  # 与报告共用视觉，不再自带一套 CSS
+    assert "RESEARCH ONLY" in dashboard
 
 
 def test_data_quality_reports_metadata_columns() -> None:
