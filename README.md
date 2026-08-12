@@ -67,9 +67,15 @@ Install https://github.com/TingdeLiu/quant.ai as an MCP server:
 
 ## Daily market report & dashboard
 
-`quant-ai market-report` builds a daily US-equity research brief — your holdings P&L (with a per-position sparkline), market overview, a fund/index tracker (Nasdaq 100 / S&P 500 / semis / AI), potential-picks / high-risk lists, quant picks by holding horizon (Chinese name, analyst valuation-range bar, day change, held positions pinned to the top), and free news headlines — in an Anthropic-style design, written as HTML + a self-contained artifact + Markdown + JSON:
+`quant-ai market-report` builds a daily US-equity research brief — your holdings P&L (with a per-position sparkline), a **per-holding profile card** for every position, market overview, a fund/index tracker (Nasdaq 100 / S&P 500 / semis / AI), potential-picks / high-risk lists, quant picks by holding horizon (Chinese name, analyst valuation-range bar, day change, held positions pinned to the top), and free news headlines — in an Anthropic-style design, written as HTML + a self-contained artifact + Markdown + JSON:
 
 <img src="assets/market-report-example.png" alt="Daily market report — your holdings P&L opens the brief" width="820">
+
+Right under the P&L table, **Holdings at a glance** gives each position its own card: portfolio weight, trend state, 5D/1M/3M returns, annualized volatility, 1-year max drawdown, distance from the 52-week high, strength against the benchmark, the sell-side analyst range, where it stands in the quant lists, its recent headlines, and a click-to-expand 1W–5Y close chart.
+
+That section deliberately stops at the facts. It carries **no buy/sell call and no price forecast** — a test asserts the wording never drifts. This is a research tool, not a licensed adviser: it lays out the evidence and leaves the decision to you.
+
+The per-holding news blurbs are **hand-written and read from `data/news_digest.json`** (`{as_of, digests: {SYMBOL: "one line"}}`) — the project never calls an LLM API for them. When that file's `as_of` is older than the report's data date, each card is stamped "digest as of …", so a stale summary can't pass itself off as today's.
 
 `quant-ai serve-dashboard` (or `write-dashboard`) renders backtest diagnostics — headline metrics, alerts, period breakdown, risk checks, positions and trades — with a built-in **EN / 中文** toggle:
 

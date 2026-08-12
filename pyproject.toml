@@ -30,7 +30,10 @@ dependencies = [
     "rich>=13.7",
     "matplotlib>=3.8",
     "scikit-learn>=1.4",
-    "mcp>=1.20",
+    # 上界不能去掉：mcp 2.0 把 FastMCP 重命名为 MCPServer、模块从 mcp.server.fastmcp
+    # 挪到 mcp.server.mcpserver，无上界时 CI 会装 2.x 而 mcp_server.py 直接 ImportError。
+    # 迁移到 2.x 是独立的一次改造（还要同步升级用户本地长驻的 MCP server）。
+    "mcp>=1.20,<2",
 ]
 
 [project.optional-dependencies]
