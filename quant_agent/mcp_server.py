@@ -428,8 +428,10 @@ async def quant_generate_market_report(params: ConfigInput) -> dict[str, Any]:
 
     Returns:
         dict: { display:"html_artifact", artifact_html_path, report_markdown (fallback),
-        as_of_date, data_status, holdings (P&L snapshot or None), market_overview{},
-        buy_candidates[], high_risk[], quant_candidates{}, news[], warnings[], disclaimer }
+        as_of_date, data_status, holdings (P&L snapshot or None), market_overview{}
+        (benchmark stats, breadth, VIX risk gauge), sectors[] (sector-ETF rotation),
+        fund_trackers[] (indices/themes/cross-asset), buy_candidates[], high_risk[],
+        quant_candidates{}, news[], warnings[], disclaimer }
     """
     try:
         config = _load(params.config)
@@ -449,6 +451,8 @@ async def quant_generate_market_report(params: ConfigInput) -> dict[str, Any]:
             "data_status": report.get("data_status"),
             "holdings": report.get("holdings"),
             "market_overview": report.get("market_overview", {}),
+            "sectors": report.get("sectors", []),
+            "fund_trackers": report.get("fund_trackers", []),
             "buy_candidates": report.get("buy_candidates", []),
             "high_risk": report.get("high_risk", []),
             "quant_candidates": report.get("quant_candidates", {}),

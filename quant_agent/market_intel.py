@@ -70,17 +70,52 @@ PROFILE_DISPLAY: dict[str, dict[str, Any]] = {
     "short_term": {"en": "Short-term", "zh": "短线", "horizon_en": "1-4 weeks", "horizon_zh": "1-4 周", "tag_en": "reversal / short trend", "tag_zh": "反转 / 短趋势", "order": 3},
 }
 
-# Index/sector ETFs tracked in the "fund & index" section regardless of the user's universe.
-FUND_TRACKERS: list[dict[str, str]] = [
-    {"symbol": "QQQ", "label_en": "Nasdaq 100", "label_zh": "纳斯达克100"},
-    {"symbol": "SPY", "label_en": "S&P 500", "label_zh": "标普500"},
-    {"symbol": "DIA", "label_en": "Dow Jones", "label_zh": "道琼斯"},
-    {"symbol": "SMH", "label_en": "Semiconductors", "label_zh": "半导体"},
-    {"symbol": "AIQ", "label_en": "AI & Tech", "label_zh": "人工智能"},
+# Index/theme/cross-asset tickers tracked in the "fund & index" section regardless of the
+# user's universe. ``group`` drives the sub-headings in the rendered section; ``index_quote``
+# marks a level rather than a dollar price (VIX), so renderers drop the $ sign.
+FUND_TRACKERS: list[dict[str, Any]] = [
+    {"symbol": "SPY", "label_en": "S&P 500", "label_zh": "标普500", "group": "index"},
+    {"symbol": "QQQ", "label_en": "Nasdaq 100", "label_zh": "纳斯达克100", "group": "index"},
+    {"symbol": "DIA", "label_en": "Dow Jones", "label_zh": "道琼斯", "group": "index"},
+    {"symbol": "IWM", "label_en": "Russell 2000", "label_zh": "罗素2000小盘", "group": "index"},
+    {"symbol": "SMH", "label_en": "Semiconductors", "label_zh": "半导体", "group": "theme"},
+    {"symbol": "AIQ", "label_en": "AI & Tech", "label_zh": "人工智能", "group": "theme"},
+    # 跨资产：判断风险偏好的旁证（股票之外的钱往哪走）。
+    {"symbol": "^VIX", "label_en": "Volatility (VIX)", "label_zh": "波动率 VIX", "group": "macro", "index_quote": True},
+    {"symbol": "TLT", "label_en": "20y+ Treasuries", "label_zh": "20年期以上美债", "group": "macro"},
+    {"symbol": "GLD", "label_en": "Gold", "label_zh": "黄金", "group": "macro"},
+    {"symbol": "UUP", "label_en": "US Dollar", "label_zh": "美元指数", "group": "macro"},
+    {"symbol": "USO", "label_en": "Crude Oil", "label_zh": "原油", "group": "macro"},
 ]
+_FUND_GROUP_LABELS: dict[str, tuple[str, str]] = {
+    "index": ("Broad indices", "宽基指数"),
+    "theme": ("Themes", "主题板块"),
+    "macro": ("Cross-asset", "跨资产"),
+}
+
+# GICS sector ETFs (SPDR Select Sector) — the sector-rotation section. Always tracked, like
+# the index ETFs above, so rotation is readable no matter what the user's universe holds.
+SECTOR_ETFS: list[dict[str, str]] = [
+    {"symbol": "XLK", "label_en": "Technology", "label_zh": "科技"},
+    {"symbol": "XLC", "label_en": "Communication", "label_zh": "通讯服务"},
+    {"symbol": "XLY", "label_en": "Cons. discretionary", "label_zh": "非必需消费"},
+    {"symbol": "XLP", "label_en": "Cons. staples", "label_zh": "必需消费"},
+    {"symbol": "XLE", "label_en": "Energy", "label_zh": "能源"},
+    {"symbol": "XLF", "label_en": "Financials", "label_zh": "金融"},
+    {"symbol": "XLV", "label_en": "Health care", "label_zh": "医疗保健"},
+    {"symbol": "XLI", "label_en": "Industrials", "label_zh": "工业"},
+    {"symbol": "XLB", "label_en": "Materials", "label_zh": "原材料"},
+    {"symbol": "XLRE", "label_en": "Real estate", "label_zh": "房地产"},
+    {"symbol": "XLU", "label_en": "Utilities", "label_zh": "公用事业"},
+]
+
+_VIX_SYMBOL = "^VIX"
 # Index/sector ETFs never have analyst price targets and are already covered by their own
-# section above — keep them out of the single-stock picks (潜力股/高风险/研究推荐).
+# sections — keep them out of the single-stock picks (潜力股/高风险/研究推荐) and out of the
+# breadth stats, where a dozen ETFs would dilute what the user's own names are doing.
 _FUND_TRACKER_SYMBOLS = {spec["symbol"] for spec in FUND_TRACKERS}
+_SECTOR_SYMBOLS = {spec["symbol"] for spec in SECTOR_ETFS}
+_ETF_TRACKER_SYMBOLS = _FUND_TRACKER_SYMBOLS | _SECTOR_SYMBOLS
 
 # Click-to-expand detail charts: timeframe windows in trading days, from daily closes.
 # 数据库是日线收盘，无盘中数据 —— 最短窗口为 1 周（当日涨跌已在行内展示）。
@@ -171,7 +206,7 @@ def build_market_report(
     generated_at = datetime.now(UTC).isoformat()
 
     # Fixed index/sector ETFs are always tracked, regardless of the user's own universe.
-    fund_symbols = [spec["symbol"] for spec in FUND_TRACKERS]
+    fund_symbols = [str(spec["symbol"]) for spec in (*FUND_TRACKERS, *SECTOR_ETFS)]
     extra_funds = [s for s in fund_symbols if s not in config.data.universe]
     if extra_funds:
         merged_data = dataclasses.replace(config.data, universe=[*config.data.universe, *extra_funds])
@@ -185,6 +220,7 @@ def build_market_report(
         "universe_size": len(config.data.universe),
         "market_overview": {},
         "fund_trackers": [],
+        "sectors": [],
         "buy_candidates": [],
         "high_risk": [],
         "quant_candidates": {},
@@ -221,6 +257,9 @@ def build_market_report(
         analysis_symbols = analysis["focus_symbols"]
         report["quant_candidates"] = _quant_candidates(prices, config, lang)
         report["fund_trackers"] = _fund_tracker_snapshot(by_symbol, lang)
+        report["sectors"] = _sector_rotation(by_symbol, config.strategy.benchmark, lang)
+        if gauge := _risk_gauge(by_symbol):
+            report["market_overview"]["risk_gauge"] = gauge
 
     # Chat-managed portfolio: holdings snapshot (P&L) + held symbols lead the news focus.
     portfolio: dict[str, Any] = {}
@@ -519,15 +558,18 @@ def _price_analysis(prices: pd.DataFrame, benchmark: str, lang: str = "en") -> d
                 "ret_63d": ret_63d,
                 "vol_annual": round(vol_annual, 4) if vol_annual is not None else None,
                 "trend_up": bool(trend_up),
+                "above_ma_20": bool(last >= ma_20),
+                "above_ma_50": bool(last >= ma_50),
                 "dist_from_high": round(dist_from_high, 4),
                 "max_drawdown_252": round(drawdown, 4),
             }
         )
 
     frame = pd.DataFrame(rows)
-    overview = _market_overview(frame, benchmark)
-    # Benchmark lookup needs the full frame; candidate ranking excludes the fixed fund/index ETFs.
-    candidate_frame = frame[~frame["symbol"].isin(_FUND_TRACKER_SYMBOLS)] if not frame.empty else frame
+    # Benchmark lookup needs the full frame; candidate ranking and the breadth stats exclude
+    # the fixed index/sector ETFs (they are not picks, and they would dilute breadth).
+    candidate_frame = frame[~frame["symbol"].isin(_ETF_TRACKER_SYMBOLS)] if not frame.empty else frame
+    overview = _market_overview(frame, candidate_frame, benchmark)
     buy_candidates = _rank_buy_candidates(candidate_frame, lang)
     high_risk = _rank_high_risk(candidate_frame, lang)
     focus = []
@@ -545,25 +587,110 @@ def _price_analysis(prices: pd.DataFrame, benchmark: str, lang: str = "en") -> d
     }
 
 
-def _market_overview(frame: pd.DataFrame, benchmark: str) -> dict[str, Any]:
+def _market_overview(frame: pd.DataFrame, breadth_frame: pd.DataFrame, benchmark: str) -> dict[str, Any]:
+    """Benchmark stats (from the full frame) + breadth stats (single stocks only).
+
+    ``breadth_frame`` drops the fixed index/sector ETFs: they move with the market by
+    construction, so counting them as "names advancing" would flatter the breadth reading.
+    """
     if frame.empty:
         return {}
-    valid = frame.dropna(subset=["ret_21d"])
-    advancing = float((valid["ret_5d"] > 0).mean()) if not valid.empty else 0.0
-    overview = {
-        "symbols_analyzed": int(len(frame)),
-        "breadth_5d_advancing_pct": round(advancing * 100, 1),
-        "avg_ret_5d_pct": round(float(valid["ret_5d"].mean()) * 100, 2) if not valid.empty else None,
-        "avg_ret_21d_pct": round(float(valid["ret_21d"].mean()) * 100, 2) if not valid.empty else None,
-    }
+    sample = breadth_frame if not breadth_frame.empty else frame
+    valid = sample.dropna(subset=["ret_21d"])
+    overview: dict[str, Any] = {"symbols_analyzed": int(len(sample))}
+    if not valid.empty:
+        overview.update(
+            {
+                "breadth_5d_advancing_pct": round(float((valid["ret_5d"] > 0).mean()) * 100, 1),
+                "breadth_21d_advancing_pct": round(float((valid["ret_21d"] > 0).mean()) * 100, 1),
+                "above_ma20_pct": round(float(valid["above_ma_20"].mean()) * 100, 1),
+                "above_ma50_pct": round(float(valid["above_ma_50"].mean()) * 100, 1),
+                # 距 52 周高点 5% 以内算"贴着新高"，跌超 20% 算"深度回撤"——两头的数量比均值更能说明分化。
+                "near_high_count": int((valid["dist_from_high"] >= -0.05).sum()),
+                "deep_drawdown_count": int((valid["dist_from_high"] <= -0.20).sum()),
+                "avg_ret_5d_pct": round(float(valid["ret_5d"].mean()) * 100, 2),
+                "avg_ret_21d_pct": round(float(valid["ret_21d"].mean()) * 100, 2),
+                # 中位数抗极值：少数几只翻倍股能把均值拉到与多数标的体感相反的方向。
+                "median_ret_5d_pct": round(float(valid["ret_5d"].median()) * 100, 2),
+                "median_ret_21d_pct": round(float(valid["ret_21d"].median()) * 100, 2),
+            }
+        )
     bench = frame[frame["symbol"] == benchmark.upper()]
     if not bench.empty:
         row = bench.iloc[0]
         overview["benchmark"] = benchmark.upper()
-        overview["benchmark_ret_5d_pct"] = round(float(row["ret_5d"]) * 100, 2) if pd.notna(row["ret_5d"]) else None
-        overview["benchmark_ret_21d_pct"] = round(float(row["ret_21d"]) * 100, 2) if pd.notna(row["ret_21d"]) else None
+        overview["benchmark_last_price"] = float(row["last_price"])
+        for key, column in (("1d", "ret_1d"), ("5d", "ret_5d"), ("21d", "ret_21d"), ("63d", "ret_63d")):
+            value = row[column]
+            overview[f"benchmark_ret_{key}_pct"] = round(float(value) * 100, 2) if pd.notna(value) else None
         overview["benchmark_trend_up"] = bool(row["trend_up"])
+        overview["benchmark_dist_from_high_pct"] = round(float(row["dist_from_high"]) * 100, 2)
+        overview["benchmark_max_drawdown_252_pct"] = round(float(row["max_drawdown_252"]) * 100, 2)
+        if pd.notna(row["vol_annual"]):
+            overview["benchmark_vol_annual_pct"] = round(float(row["vol_annual"]) * 100, 1)
     return overview
+
+
+# VIX 区间划分：常用的市场共识分界（<15 平静、>25 承压、>35 恐慌），只用于给读数配一句标签。
+_VIX_BANDS: list[tuple[float, str, str]] = [
+    (15.0, "calm", "平静"),
+    (20.0, "normal", "正常"),
+    (25.0, "cautious", "警觉"),
+    (35.0, "stressed", "承压"),
+]
+
+
+def _risk_gauge(by_symbol: dict[str, pd.DataFrame]) -> dict[str, Any]:
+    """VIX level + where it sits in its own trailing year — the report's one fear/greed read."""
+    group = by_symbol.get(_VIX_SYMBOL)
+    if group is None:
+        return {}
+    closes = group["adj_close"].astype(float)
+    if closes.empty:
+        return {}
+    level = float(closes.iloc[-1])
+    band_en, band_zh = "panic", "恐慌"
+    for ceiling, en, zh in _VIX_BANDS:
+        if level < ceiling:
+            band_en, band_zh = en, zh
+            break
+    gauge: dict[str, Any] = {"level": round(level, 2), "band_en": band_en, "band_zh": band_zh}
+    hist = closes.tail(252)
+    if len(hist) >= 60:
+        gauge["percentile_1y"] = round(float((hist <= level).mean()) * 100, 1)
+        gauge["avg_1y"] = round(float(hist.mean()), 2)
+    if (change := _pct(closes, 5)) is not None:
+        gauge["ret_5d_pct"] = round(change * 100, 2)
+    return gauge
+
+
+def _sector_rotation(by_symbol: dict[str, pd.DataFrame], benchmark: str, lang: str = "en") -> list[dict[str, Any]]:
+    """Per-sector 1D/5D/1M/3M returns plus 1M excess over the benchmark, best 1M first."""
+    bench_group = by_symbol.get(benchmark.upper())
+    bench_21d = _pct(bench_group["adj_close"].astype(float), 21) if bench_group is not None else None
+    out: list[dict[str, Any]] = []
+    for spec in SECTOR_ETFS:
+        group = by_symbol.get(spec["symbol"])
+        if group is None:
+            continue
+        adj = group["adj_close"].astype(float)
+        if adj.empty:
+            continue
+        ret_21d = _pct(adj, 21)
+        row: dict[str, Any] = {
+            "symbol": spec["symbol"],
+            "label": tr(spec["label_en"], spec["label_zh"], lang),
+            "last_price": round(float(adj.iloc[-1]), 2),
+            "ret_1d_pct": round(r * 100, 2) if (r := _pct(adj, 1)) is not None else None,
+            "ret_5d_pct": round(r * 100, 2) if (r := _pct(adj, 5)) is not None else None,
+            "ret_21d_pct": round(ret_21d * 100, 2) if ret_21d is not None else None,
+            "ret_63d_pct": round(r * 100, 2) if (r := _pct(adj, 63)) is not None else None,
+        }
+        if ret_21d is not None and bench_21d is not None:
+            row["vs_benchmark_21d_pct"] = round((ret_21d - bench_21d) * 100, 2)
+        out.append(row)
+    out.sort(key=lambda r: (r["ret_21d_pct"] is None, -(r["ret_21d_pct"] or 0.0)))
+    return out
 
 
 def _rank_buy_candidates(frame: pd.DataFrame, lang: str = "en", limit: int = 8) -> list[dict[str, Any]]:
@@ -794,10 +921,10 @@ def _pct(series: pd.Series, periods: int) -> float | None:
 
 
 def _fund_tracker_snapshot(by_symbol: dict[str, pd.DataFrame], lang: str = "en") -> list[dict[str, Any]]:
-    """Latest price + 1D/5D/1M return for the fixed index/sector ETF watch list."""
+    """Latest level + 1D/5D/1M/3M return for the fixed index/theme/cross-asset watch list."""
     out: list[dict[str, Any]] = []
     for spec in FUND_TRACKERS:
-        symbol = spec["symbol"]
+        symbol = str(spec["symbol"])
         group = by_symbol.get(symbol)
         if group is None:
             continue
@@ -810,12 +937,15 @@ def _fund_tracker_snapshot(by_symbol: dict[str, pd.DataFrame], lang: str = "en")
         out.append(
             {
                 "symbol": symbol,
-                "label": tr(spec["label_en"], spec["label_zh"], lang),
+                "label": tr(str(spec["label_en"]), str(spec["label_zh"]), lang),
+                "group": str(spec.get("group", "index")),
+                "index_quote": bool(spec.get("index_quote")),
                 "last_price": last_price,
                 "day_change_value": day_value,
                 "day_change_pct": day_pct,
                 "ret_5d_pct": round(r * 100, 2) if (r := _pct(adj, 5)) is not None else None,
                 "ret_21d_pct": round(r * 100, 2) if (r := _pct(adj, 21)) is not None else None,
+                "ret_63d_pct": round(r * 100, 2) if (r := _pct(adj, 63)) is not None else None,
             }
         )
     return out
@@ -1263,35 +1393,93 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.append(f"## {tr('Market overview', '市场概览', lang)}")
         if overview.get("benchmark"):
             trend = tr("up", "向上", lang) if overview.get("benchmark_trend_up") else tr("down", "向下", lang)
+            day, week = _fmt_pct_signed(overview.get("benchmark_ret_1d_pct")), _fmt_pct_signed(overview.get("benchmark_ret_5d_pct"))
+            month, quarter = _fmt_pct_signed(overview.get("benchmark_ret_21d_pct")), _fmt_pct_signed(overview.get("benchmark_ret_63d_pct"))
             lines.append(tr(
-                f"- Benchmark {overview['benchmark']}: 5D {overview.get('benchmark_ret_5d_pct')}%, "
-                f"1M {overview.get('benchmark_ret_21d_pct')}%, trend {trend}",
-                f"- 基准 {overview['benchmark']}：近5日 {overview.get('benchmark_ret_5d_pct')}%，"
-                f"近1月 {overview.get('benchmark_ret_21d_pct')}%，趋势{trend}",
+                f"- Benchmark {overview['benchmark']} ({overview.get('benchmark_last_price')}): today {day}, "
+                f"5D {week}, 1M {month}, 3M {quarter}, trend {trend}",
+                f"- 基准 {overview['benchmark']}（{overview.get('benchmark_last_price')}）：当日 {day}，"
+                f"近5日 {week}，近1月 {month}，近3月 {quarter}，趋势{trend}",
+                lang,
+            ))
+            lines.append(tr(
+                f"- {overview['benchmark']} risk: from 52w high {overview.get('benchmark_dist_from_high_pct')}%, "
+                f"1y max drawdown {overview.get('benchmark_max_drawdown_252_pct')}%, "
+                f"ann. vol {overview.get('benchmark_vol_annual_pct')}%",
+                f"- {overview['benchmark']} 风险：距52周高点 {overview.get('benchmark_dist_from_high_pct')}%，"
+                f"近一年最大回撤 {overview.get('benchmark_max_drawdown_252_pct')}%，"
+                f"年化波动 {overview.get('benchmark_vol_annual_pct')}%",
+                lang,
+            ))
+        gauge = overview.get("risk_gauge") or {}
+        if gauge:
+            band = tr(str(gauge.get("band_en")), str(gauge.get("band_zh")), lang)
+            percentile = gauge.get("percentile_1y")
+            rank = (
+                tr(f", {percentile}th percentile of the past year", f"，处于近一年 {percentile}% 分位", lang)
+                if percentile is not None
+                else ""
+            )
+            lines.append(tr(
+                f"- VIX: {gauge.get('level')} ({band}), 5D {gauge.get('ret_5d_pct')}%{rank}",
+                f"- 波动率 VIX：{gauge.get('level')}（{band}），近5日 {gauge.get('ret_5d_pct')}%{rank}",
                 lang,
             ))
         lines.append(tr(
-            f"- Sample: {overview.get('symbols_analyzed')}, 5D advancing: {overview.get('breadth_5d_advancing_pct')}%",
-            f"- 样本数：{overview.get('symbols_analyzed')}，近5日上涨占比：{overview.get('breadth_5d_advancing_pct')}%",
+            f"- Breadth ({overview.get('symbols_analyzed')} single stocks): "
+            f"5D advancing {overview.get('breadth_5d_advancing_pct')}%, "
+            f"1M advancing {overview.get('breadth_21d_advancing_pct')}%, "
+            f"above 20D MA {overview.get('above_ma20_pct')}%, above 50D MA {overview.get('above_ma50_pct')}%",
+            f"- 市场广度（{overview.get('symbols_analyzed')} 只个股）："
+            f"近5日上涨 {overview.get('breadth_5d_advancing_pct')}%，"
+            f"近1月上涨 {overview.get('breadth_21d_advancing_pct')}%，"
+            f"站上20日线 {overview.get('above_ma20_pct')}%，站上50日线 {overview.get('above_ma50_pct')}%",
             lang,
         ))
         lines.append(tr(
-            f"- Sample avg: 5D {overview.get('avg_ret_5d_pct')}%, 1M {overview.get('avg_ret_21d_pct')}%",
-            f"- 样本平均：近5日 {overview.get('avg_ret_5d_pct')}%，近1月 {overview.get('avg_ret_21d_pct')}%",
+            f"- Dispersion: {overview.get('near_high_count')} within 5% of the 52w high, "
+            f"{overview.get('deep_drawdown_count')} more than 20% below it",
+            f"- 分化：{overview.get('near_high_count')} 只距52周高点 5% 以内，"
+            f"{overview.get('deep_drawdown_count')} 只低于高点 20% 以上",
             lang,
         ))
+        lines.append(tr(
+            f"- Sample returns: 5D avg {overview.get('avg_ret_5d_pct')}% / median {overview.get('median_ret_5d_pct')}%, "
+            f"1M avg {overview.get('avg_ret_21d_pct')}% / median {overview.get('median_ret_21d_pct')}%",
+            f"- 样本收益：近5日 均值 {overview.get('avg_ret_5d_pct')}% / 中位数 {overview.get('median_ret_5d_pct')}%，"
+            f"近1月 均值 {overview.get('avg_ret_21d_pct')}% / 中位数 {overview.get('median_ret_21d_pct')}%",
+            lang,
+        ))
+        lines.append("")
+
+    if report.get("sectors"):
+        lines.append(f"## {tr('Sector rotation', '板块轮动', lang)}")
+        lines.append("| " + " | ".join(tr(
+            "Sector|Last|Day|5D|1M|3M|1M vs bench",
+            "板块|最新价|当日|近5日|近1月|近3月|近1月相对基准", lang).split("|")) + " |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- |")
+        for s in report["sectors"]:
+            rel = s.get("vs_benchmark_21d_pct")
+            lines.append(
+                f"| {s['symbol']} {s['label']} | {s['last_price']} | {_fmt_pct_signed(s.get('ret_1d_pct'))} | "
+                f"{_fmt_pct_signed(s.get('ret_5d_pct'))} | {_fmt_pct_signed(s.get('ret_21d_pct'))} | "
+                f"{_fmt_pct_signed(s.get('ret_63d_pct'))} | {f'{rel:+.2f}pp' if rel is not None else '—'} |"
+            )
         lines.append("")
 
     if report.get("fund_trackers"):
         lines.append(f"## {tr('Fund & index tracker', '基金/指数追踪', lang)}")
         lines.append("| " + " | ".join(tr(
-            "Symbol|Name|Last|Day|5D|1M", "代码|名称|最新价|当日|近5日|近1月", lang).split("|")) + " |")
-        lines.append("| --- | --- | --- | --- | --- | --- |")
+            "Symbol|Name|Group|Last|Day|5D|1M|3M",
+            "代码|名称|分组|最新价|当日|近5日|近1月|近3月", lang).split("|")) + " |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
         for f in report["fund_trackers"]:
             day = f"{f['day_change_value']:+.2f} ({f['day_change_pct']:+.2f}%)" if f.get("day_change_pct") is not None else "—"
+            group_en, group_zh = _FUND_GROUP_LABELS.get(f.get("group", "index"), ("", ""))
             lines.append(
-                f"| {f['symbol']} | {f['label']} | {f['last_price']} | {day} | "
-                f"{f.get('ret_5d_pct')}% | {f.get('ret_21d_pct')}% |"
+                f"| {f['symbol']} | {f['label']} | {tr(group_en, group_zh, lang)} | {f['last_price']} | {day} | "
+                f"{_fmt_pct_signed(f.get('ret_5d_pct'))} | {_fmt_pct_signed(f.get('ret_21d_pct'))} | "
+                f"{_fmt_pct_signed(f.get('ret_63d_pct'))} |"
             )
         lines.append("")
 
@@ -1467,6 +1655,37 @@ _CSS_COMPONENTS = """
 .qa-report .tile .t-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .qa-report .tile .t-value { font-family: var(--mono); font-size: 27px; font-weight: 700; margin-top: 8px; color: var(--ink); }
 .qa-report .tile .t-sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 6px; }
+.qa-report .grp-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); margin: 20px 0 8px; }
+.qa-report .grp-label:first-child { margin-top: 0; }
+
+/* Breadth meters (0-100% with a 50% reference tick) */
+.qa-report .brd-head { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); margin: 22px 0 8px; }
+.qa-report .brd { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px 26px; padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.qa-report .brd-row { display: flex; flex-direction: column; gap: 7px; }
+.qa-report .brd-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.qa-report .brd-k { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.qa-report .brd-v { font-family: var(--mono); font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.qa-report .brd-track { position: relative; height: 7px; border-radius: 4px; background: var(--sand-2); }
+.qa-report .brd-half { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; margin-left: -0.5px; background: var(--line-2); }
+.qa-report .brd-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: linear-gradient(90deg, var(--green-deep), var(--green)); }
+.qa-report .brd-fill.weak { background: linear-gradient(90deg, var(--down), var(--down-deep)); }
+.qa-report .brd-note { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin: 10px 0 0; }
+
+/* Sector rotation bars (centered at 0, scaled to the strongest move) */
+.qa-report .rot { border: 1px solid var(--line); border-radius: 14px; background: var(--card); overflow: hidden; }
+.qa-report .rot-row { display: grid; grid-template-columns: minmax(120px, 1.05fr) minmax(110px, 2fr) 72px 78px; align-items: center; gap: 14px; padding: 10px 18px; border-bottom: 1px solid var(--sand); }
+.qa-report .rot-row:last-child { border-bottom: 0; }
+.qa-report .rot-row:hover { background: var(--sand); }
+.qa-report .rot-legend { background: var(--sand); font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.qa-report .rot-legend:hover { background: var(--sand); }
+.qa-report .rot-name { font-size: 13.5px; color: var(--ink); }
+.qa-report .rot-name .sym { font-family: var(--mono); font-weight: 700; font-size: 12px; color: var(--orange-deep); margin-right: 7px; }
+.qa-report .rot-track { position: relative; height: 8px; border-radius: 4px; background: var(--sand-2); }
+.qa-report .rot-fill { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.qa-report .rot-zero { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; margin-left: -0.5px; background: var(--line-2); }
+.qa-report .rot-v { font-family: var(--mono); font-size: 12.5px; text-align: right; }
+/* 窄屏：条形换行独占一行，表头行的列对不上了直接收起（数值本身已自带正负色）。 */
+@media (max-width: 600px) { .qa-report .rot-row { grid-template-columns: 1fr 68px 74px; } .qa-report .rot-track { grid-column: 1 / -1; order: 3; } .qa-report .rot-legend { display: none; } }
 
 /* Recommendation columns */
 .qa-report .reco-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 16px; }
@@ -1728,6 +1947,7 @@ def _html_sections(report: dict[str, Any], lang: str) -> str:
         ]),
         (tr("Market", "大盘", lang), [
             _html_overview(report, n, lang),
+            _html_sectors(report, n, lang),
             _html_funds(report, n, lang),
         ]),
         (tr("Ideas", "机会", lang), [
@@ -2073,23 +2293,163 @@ def _html_holdings(report: dict[str, Any], n: _SectionCounter, lang: str = "en")
     )
 
 
+def _breadth_row(label: str, pct: float | None, sub: str = "") -> str:
+    """One 0-100% breadth meter with a 50% reference tick (below 50% turns the bar red)."""
+    if pct is None:
+        return ""
+    width = max(0.0, min(100.0, float(pct)))
+    weak = " weak" if width < 50 else ""
+    sub_html = f'<span class="brd-sub">{_esc(sub)}</span>' if sub else ""
+    return (
+        '<div class="brd-row">'
+        f'<div class="brd-top"><span class="brd-k">{_esc(label)}</span>'
+        f'<span class="brd-v">{width:.1f}%{sub_html}</span></div>'
+        f'<div class="brd-track"><span class="brd-half"></span>'
+        f'<span class="brd-fill{weak}" style="width:{width:.1f}%"></span></div>'
+        "</div>"
+    )
+
+
+def _risk_gauge_html(gauge: dict[str, Any], lang: str) -> str:
+    """VIX tile: level + band label, with the trailing-year percentile as the sub-line."""
+    if not gauge:
+        return ""
+    band = tr(str(gauge.get("band_en")), str(gauge.get("band_zh")), lang)
+    level = float(gauge.get("level") or 0.0)
+    # 高波动标红、低波动标绿 —— 这里的颜色说的是市场情绪，不是"涨/跌"。
+    cls = "neg" if level >= 25 else "pos" if level < 15 else ""
+    bits: list[str] = [band]
+    if (percentile := gauge.get("percentile_1y")) is not None:
+        bits.append(tr(f"{percentile}th pct of 1y", f"近一年 {percentile}% 分位", lang))
+    if (change := gauge.get("ret_5d_pct")) is not None:
+        bits.append(f"5D {change:+.2f}%")
+    return (
+        f'<div class="tile"><div class="t-label">{_esc(tr("Volatility · VIX", "波动率 · VIX", lang))}</div>'
+        f'<div class="t-value"><span class="{cls}">{_esc(level)}</span></div>'
+        f'<div class="t-sub">{_esc(" · ".join(bits))}</div></div>'
+    )
+
+
 def _html_overview(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
     overview = report.get("market_overview") or {}
     if not overview:
         return ""
-    tiles: list[tuple[str, str]] = []
-    if overview.get("benchmark"):
-        tiles.append((tr(f"Benchmark {overview['benchmark']} · 1M", f"基准 {overview['benchmark']} · 近1月", lang), _delta(overview.get("benchmark_ret_21d_pct"))))
-        tiles.append((f"{overview['benchmark']} · {tr('5D', '近5日', lang)}", _delta(overview.get("benchmark_ret_5d_pct"))))
-    tiles.append((tr("5D advancing", "近5日上涨占比", lang), f"{overview.get('breadth_5d_advancing_pct', '—')}%"))
-    tiles.append((tr("Sample avg · 1M", "样本均值 · 近1月", lang), _delta(overview.get("avg_ret_21d_pct"))))
-    tiles.append((tr("Sample avg · 5D", "样本均值 · 近5日", lang), _delta(overview.get("avg_ret_5d_pct"))))
-    tiles.append((tr("Names analyzed", "分析标的数", lang), str(overview.get("symbols_analyzed", "—"))))
-    cells = "".join(
-        f'<div class="tile"><div class="t-label">{_esc(label)}</div><div class="t-value">{value}</div></div>'
-        for label, value in tiles
+    tiles: list[str] = []
+    bench = overview.get("benchmark")
+    if bench:
+        trend_up = overview.get("benchmark_trend_up")
+        trend = tr("trend up", "趋势向上", lang) if trend_up else tr("trend down", "趋势向下", lang)
+        sub_bits = [trend]
+        if (dist := overview.get("benchmark_dist_from_high_pct")) is not None:
+            sub_bits.append(tr(f"{dist:.1f}% from 52w high", f"距52周高点 {dist:.1f}%", lang))
+        if (vol := overview.get("benchmark_vol_annual_pct")) is not None:
+            sub_bits.append(tr(f"ann. vol {vol}%", f"年化波动 {vol}%", lang))
+        price = overview.get("benchmark_last_price")
+        tiles.append(
+            f'<div class="tile"><div class="t-label">{_esc(tr(f"Benchmark {bench}", f"基准 {bench}", lang))}</div>'
+            f'<div class="t-value">{_money_html(price)}</div>'
+            f'<div class="t-sub">{_esc(" · ".join(sub_bits))}</div></div>'
+        )
+        for key, label in (
+            ("benchmark_ret_1d_pct", tr("Today", "当日", lang)),
+            ("benchmark_ret_5d_pct", tr("5D", "近5日", lang)),
+            ("benchmark_ret_21d_pct", tr("1M", "近1月", lang)),
+            ("benchmark_ret_63d_pct", tr("3M", "近3月", lang)),
+        ):
+            tiles.append(
+                f'<div class="tile"><div class="t-label">{_esc(bench)} · {_esc(label)}</div>'
+                f'<div class="t-value">{_delta(overview.get(key))}</div></div>'
+            )
+    if gauge_html := _risk_gauge_html(overview.get("risk_gauge") or {}, lang):
+        tiles.append(gauge_html)
+
+    sample = overview.get("symbols_analyzed", "—")
+    meters = "".join(
+        [
+            _breadth_row(tr("5D advancing", "近5日上涨占比", lang), overview.get("breadth_5d_advancing_pct")),
+            _breadth_row(tr("1M advancing", "近1月上涨占比", lang), overview.get("breadth_21d_advancing_pct")),
+            _breadth_row(tr("Above 20D MA", "站上20日线", lang), overview.get("above_ma20_pct")),
+            _breadth_row(tr("Above 50D MA", "站上50日线", lang), overview.get("above_ma50_pct")),
+        ]
     )
-    return f'<section>{_sec_head(n.next(), tr("Market overview", "市场概览", lang))}<div class="tiles">{cells}</div></section>'
+    breadth_html = ""
+    if meters:
+        near_high = overview.get("near_high_count")
+        deep = overview.get("deep_drawdown_count")
+        notes: list[str] = []
+        if near_high is not None:
+            notes.append(tr(f"{near_high} within 5% of the 52w high", f"{near_high} 只距52周高点 5% 以内", lang))
+        if deep is not None:
+            notes.append(tr(f"{deep} more than 20% below it", f"{deep} 只低于高点 20% 以上", lang))
+        for key, label in (
+            (("avg_ret_5d_pct", "median_ret_5d_pct"), tr("5D", "近5日", lang)),
+            (("avg_ret_21d_pct", "median_ret_21d_pct"), tr("1M", "近1月", lang)),
+        ):
+            avg, median = overview.get(key[0]), overview.get(key[1])
+            if avg is not None and median is not None:
+                notes.append(tr(
+                    f"{label} avg {avg:+.2f}% / median {median:+.2f}%",
+                    f"{label} 均值 {avg:+.2f}% / 中位数 {median:+.2f}%",
+                    lang,
+                ))
+        note_html = f'<p class="brd-note">{_esc(" · ".join(notes))}</p>' if notes else ""
+        breadth_html = (
+            f'<div class="brd-head">{_esc(tr(f"Breadth · {sample} single stocks", f"市场广度 · {sample} 只个股", lang))}</div>'
+            f'<div class="brd">{meters}</div>{note_html}'
+        )
+    hint = tr("benchmark · risk · breadth", "基准 · 风险 · 广度", lang)
+    head = _sec_head(n.next(), tr("Market overview", "市场概览", lang), hint)
+    return f'<section>{head}<div class="tiles">{"".join(tiles)}</div>{breadth_html}</section>'
+
+
+def _html_sectors(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
+    """Sector rotation: one centered bar per SPDR sector, scaled to the strongest 1M move."""
+    sectors = report.get("sectors") or []
+    if not sectors:
+        return ""
+    scale = max((abs(s["ret_21d_pct"]) for s in sectors if s.get("ret_21d_pct") is not None), default=0.0)
+    rows: list[str] = []
+    for s in sectors:
+        value = s.get("ret_21d_pct")
+        if value is None or scale <= 0:
+            bar = '<div class="rot-track"><span class="rot-zero"></span></div>'
+        else:
+            proportion = min(1.0, abs(value) / scale)
+            if value >= 0:
+                style = f"left:50%;width:{proportion * 50:.1f}%"
+                gradient = "linear-gradient(90deg, var(--green-deep), var(--green))"
+            else:
+                style = f"left:{50 - proportion * 50:.1f}%;width:{proportion * 50:.1f}%"
+                gradient = "linear-gradient(90deg, var(--down), var(--down-deep))"
+            bar = (
+                '<div class="rot-track"><span class="rot-zero"></span>'
+                f'<span class="rot-fill" style="{style};background:{gradient}"></span></div>'
+            )
+        rel = s.get("vs_benchmark_21d_pct")
+        rel_html = (
+            f'<span class="{"pos" if rel >= 0 else "neg"}">{rel:+.2f}pp</span>'
+            if rel is not None
+            else '<span class="muted">—</span>'
+        )
+        rows.append(
+            '<div class="rot-row">'
+            f'<div class="rot-name"><span class="sym">{_esc(s["symbol"])}</span>{_esc(s["label"])}</div>'
+            f"{bar}"
+            f'<div class="rot-v">{_delta(value)}</div>'
+            f'<div class="rot-v">{rel_html}</div>'
+            "</div>"
+        )
+    legend = (
+        '<div class="rot-row rot-legend">'
+        f'<div class="rot-name">{_esc(tr("Sector", "板块", lang))}</div>'
+        f'<div>{_esc(tr("1M move (scaled to the strongest)", "近1月涨跌（以最强板块为满量程）", lang))}</div>'
+        f'<div class="rot-v">{_esc(tr("1M", "近1月", lang))}</div>'
+        f'<div class="rot-v">{_esc(tr("vs bench", "相对基准", lang))}</div>'
+        "</div>"
+    )
+    hint = tr("SPDR select sectors · sorted by 1M", "SPDR 行业 ETF · 按近1月排序", lang)
+    head = _sec_head(n.next(), tr("Sector rotation", "板块轮动", lang), hint)
+    return f'<section>{head}<div class="rot">{legend}{"".join(rows)}</div></section>'
 
 
 def _hp_news_html(profile: dict[str, Any], lang: str) -> str:
@@ -2272,31 +2632,48 @@ def _html_reco(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> 
     return f'<section>{head}<div class="reco-grid">{"".join(columns)}</div></section>'
 
 
+def _fund_tile_html(f: dict[str, Any], charts: dict[str, Any], n: _SectionCounter, lang: str) -> str:
+    day_pct = f.get("day_change_pct")
+    day_value = f.get("day_change_value")
+    if day_pct is None or day_value is None:
+        day_html = '<span class="muted">—</span>'
+    else:
+        cls = "pos" if day_value > 0 else "neg" if day_value < 0 else "flat"
+        day_html = f'<span class="{cls}">{day_value:+.2f} ({day_pct:+.2f}%)</span>'
+    # VIX 是指数点位，不是美元价格 —— 加 $ 会读成"16 美元"。
+    level = f"{f['last_price']:,.2f}" if f.get("index_quote") else f"${f['last_price']:,.2f}"
+    panel = _detail_panel_html(f["symbol"], charts, n.uid(), lang)
+    return (
+        '<div class="tile fund">'
+        f'<div class="t-label">{_esc(f["symbol"])} · {_esc(f["label"])}</div>'
+        f'<div class="t-value">{_esc(level)}</div>'
+        f'<div class="t-sub">{day_html} · 5D {_delta(f.get("ret_5d_pct"))} · '
+        f'1M {_delta(f.get("ret_21d_pct"))} · 3M {_delta(f.get("ret_63d_pct"))}</div>'
+        f"{_detail_details_html(panel, lang)}"
+        "</div>"
+    )
+
+
 def _html_funds(report: dict[str, Any], n: _SectionCounter, lang: str = "en") -> str:
     funds = report.get("fund_trackers") or []
     if not funds:
         return ""
     charts = report.get("detail_charts") or {}
-    cards = []
-    for f in funds:
-        day_pct = f.get("day_change_pct")
-        day_value = f.get("day_change_value")
-        if day_pct is None or day_value is None:
-            day_html = '<span class="muted">—</span>'
-        else:
-            cls = "pos" if day_value > 0 else "neg" if day_value < 0 else "flat"
-            day_html = f'<span class="{cls}">{day_value:+.2f} ({day_pct:+.2f}%)</span>'
-        panel = _detail_panel_html(f["symbol"], charts, n.uid(), lang)
-        cards.append(
-            '<div class="tile fund">'
-            f'<div class="t-label">{_esc(f["symbol"])} · {_esc(f["label"])}</div>'
-            f'<div class="t-value">${f["last_price"]:,.2f}</div>'
-            f'<div class="t-sub">{day_html} · 5D {_delta(f.get("ret_5d_pct"))} · 1M {_delta(f.get("ret_21d_pct"))}</div>'
-            f"{_detail_details_html(panel, lang)}"
-            "</div>"
+    blocks: list[str] = []
+    for group, (label_en, label_zh) in _FUND_GROUP_LABELS.items():
+        members = [f for f in funds if f.get("group", "index") == group]
+        if not members:
+            continue
+        tiles = "".join(_fund_tile_html(f, charts, n, lang) for f in members)
+        blocks.append(
+            f'<div class="grp-label">{_esc(tr(label_en, label_zh, lang))}</div>'
+            f'<div class="tiles">{tiles}</div>'
         )
-    head = _sec_head(n.next(), tr("Fund & index tracker", "基金/指数追踪", lang), tr("Nasdaq / S&P 500 / semis / AI", "纳指 / 标普500 / 半导体 / AI", lang))
-    return f'<section>{head}<div class="tiles">{"".join(cards)}</div></section>'
+    if not blocks:  # 分组标签之外的 tracker（不该发生）也要能显示
+        blocks.append(f'<div class="tiles">{"".join(_fund_tile_html(f, charts, n, lang) for f in funds)}</div>')
+    hint = tr("indices / themes / cross-asset", "宽基 / 主题 / 跨资产", lang)
+    head = _sec_head(n.next(), tr("Fund & index tracker", "基金/指数追踪", lang), hint)
+    return f'<section>{head}{"".join(blocks)}</section>'
 
 
 def _html_table(report: dict[str, Any], key: str, title: str, n: _SectionCounter, lang: str = "en") -> str:

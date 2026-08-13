@@ -67,13 +67,15 @@ Install https://github.com/TingdeLiu/quant.ai as an MCP server:
 
 ## Daily market report & dashboard
 
-`quant-ai market-report` builds a daily US-equity research brief — your holdings P&L (with a per-position sparkline), a **per-holding profile card** for every position, market overview, a fund/index tracker (Nasdaq 100 / S&P 500 / semis / AI), potential-picks / high-risk lists, quant picks by holding horizon (Chinese name, analyst valuation-range bar, day change, held positions pinned to the top), and free news headlines — in an Anthropic-style design, written as HTML + a self-contained artifact + Markdown + JSON:
+`quant-ai market-report` builds a daily US-equity research brief — your holdings P&L (with a per-position sparkline), a **per-holding profile card** for every position, a market read (benchmark, breadth, VIX, sector rotation, cross-asset tracker), potential-picks / high-risk lists, quant picks by holding horizon (Chinese name, analyst valuation-range bar, day change, held positions pinned to the top), and free news headlines — in an Anthropic-style design, written as HTML + a self-contained artifact + Markdown + JSON:
 
 <img src="assets/market-report-example.png" alt="Daily market report — your holdings P&L opens the brief" width="820">
 
 Right under the P&L table, **Holdings at a glance** gives each position its own card: portfolio weight, trend state, 5D/1M/3M returns, annualized volatility, 1-year max drawdown, distance from the 52-week high, strength against the benchmark, the sell-side analyst range, where it stands in the quant lists, its recent headlines, and a click-to-expand 1W–5Y close chart.
 
 That section deliberately stops at the facts. It carries **no buy/sell call and no price forecast** — a test asserts the wording never drifts. This is a research tool, not a licensed adviser: it lays out the evidence and leaves the decision to you.
+
+The **Market** tab answers "what is the tape actually doing" rather than just quoting the index: the benchmark's day/5D/1M/3M returns next to its distance from the 52-week high, drawdown and volatility; a **VIX risk gauge** with its trailing-year percentile; **breadth meters** — share of names advancing over 5D/1M and share holding above their 20D/50D moving averages, counted over your single stocks only, so a dozen index ETFs can't flatter the reading; **sector rotation** across the eleven SPDR sector ETFs, ranked by 1-month move with their excess over the benchmark; and a **cross-asset tracker** (Russell 2000, semis, AI, VIX, long Treasuries, gold, the dollar, crude) for where the money is going outside equities.
 
 The per-holding news blurbs are **hand-written and read from `data/news_digest.json`** (`{as_of, digests: {SYMBOL: "one line"}}`) — the project never calls an LLM API for them. When that file's `as_of` is older than the report's data date, each card is stamped "digest as of …", so a stale summary can't pass itself off as today's.
 

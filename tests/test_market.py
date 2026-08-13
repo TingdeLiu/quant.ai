@@ -9,6 +9,8 @@ from _helpers import _config, _synthetic_prices
 
 from quant_agent.config import parse_config
 from quant_agent.market_intel import (
+    FUND_TRACKERS,
+    SECTOR_ETFS,
     build_market_report,
     render_artifact_html,
     render_html,
@@ -422,7 +424,7 @@ def test_fund_tracker_section(tmp_path: Path) -> None:
     report = build_market_report(config, target_fetcher=lambda symbols: {})
 
     symbols = {f["symbol"] for f in report["fund_trackers"]}
-    assert symbols == {"SPY"}  # 只有 SPY 有合成价格数据，QQQ/SMH/AIQ 无数据时静默跳过
+    assert symbols == {"SPY"}  # 只有 SPY 有合成价格数据，其余 tracker 无数据时静默跳过
     assert report["fund_trackers"][0]["day_change_pct"] is not None
 
     markdown = render_markdown(report)
@@ -430,6 +432,97 @@ def test_fund_tracker_section(tmp_path: Path) -> None:
     html = render_html(report)
     assert "Fund &amp; index tracker" in html
     assert 'class="tile fund"' in html
+
+
+def _market_prices(tmp_path: Path, periods: int = 400) -> Path:
+    """个股 + 全部板块 ETF + 指数/跨资产 tracker 的合成价格（离线，覆盖大盘栏目）。
+
+    板块按 XLK→XLU 递减 drift 生成，近1月收益因此单调递减 —— 轮动排序可断言。
+    """
+    dates = pd.bdate_range("2023-01-02", periods=periods)
+
+    def series(symbol: str, start: float, drift: float) -> list[dict]:
+        rows = []
+        for i, date in enumerate(dates):
+            price = start * ((1 + drift) ** i)
+            rows.append({
+                "date": date, "symbol": symbol, "open": price * 0.99, "high": price * 1.01,
+                "low": price * 0.98, "close": price, "adj_close": price, "volume": 1_000_000,
+            })
+        return rows
+
+    rows: list[dict] = []
+    for symbol, start, drift in [("AAA", 100.0, 0.0018), ("BBB", 50.0, 0.0008), ("CCC", 80.0, -0.0006)]:
+        rows += series(symbol, start, drift)
+    for i, spec in enumerate(SECTOR_ETFS):
+        rows += series(spec["symbol"], 50.0 + i, 0.0016 - i * 0.0004)
+    for i, spec in enumerate(FUND_TRACKERS):
+        symbol = str(spec["symbol"])
+        rows += series(symbol, 18.0 if symbol == "^VIX" else 100.0 + i * 10, 0.0009 - i * 0.0001)
+
+    csv_path = tmp_path / "market_prices.csv"
+    pd.DataFrame(rows).to_csv(csv_path, index=False)
+    return csv_path
+
+
+def _market_report(tmp_path: Path, lang: str = "en") -> dict:
+    raw = _offline_raw(tmp_path)
+    raw["data"]["csv_path"] = str(_market_prices(tmp_path))
+    raw["language"] = lang
+    config = parse_config(raw, base=tmp_path)
+    return build_market_report(config, target_fetcher=lambda symbols: {})
+
+
+def test_sector_rotation_ranks_by_one_month(tmp_path: Path) -> None:
+    report = _market_report(tmp_path)
+    sectors = report["sectors"]
+
+    assert [s["symbol"] for s in sectors] == [spec["symbol"] for spec in SECTOR_ETFS]  # drift 递减 = 名次递减
+    returns = [s["ret_21d_pct"] for s in sectors]
+    assert returns == sorted(returns, reverse=True)
+    assert all(s["vs_benchmark_21d_pct"] is not None for s in sectors)  # 基准 SPY 有数据
+
+    assert "Sector rotation" in render_markdown(report)
+    html = render_html(report)
+    assert "Sector rotation" in html
+    assert 'class="rot-fill"' in html
+
+
+def test_breadth_counts_only_single_stocks(tmp_path: Path) -> None:
+    """指数/板块 ETF 与大盘同向是结构性的，算进广度会把读数系统性抬高。"""
+    report = _market_report(tmp_path)
+    overview = report["market_overview"]
+
+    assert overview["symbols_analyzed"] == 3  # AAA/BBB/CCC —— 十几只 ETF 不计入
+    assert overview["breadth_5d_advancing_pct"] is not None
+    assert overview["above_ma20_pct"] is not None
+    assert overview["benchmark"] == "SPY"  # 基准本身仍从全量 frame 里取
+    assert overview["benchmark_ret_63d_pct"] is not None
+    assert overview["near_high_count"] + overview["deep_drawdown_count"] <= 3
+
+
+def test_risk_gauge_reads_vix(tmp_path: Path) -> None:
+    report = _market_report(tmp_path)
+    gauge = report["market_overview"]["risk_gauge"]
+
+    assert gauge["level"] > 0
+    assert gauge["band_en"] in {"calm", "normal", "cautious", "stressed", "panic"}
+    assert 0 <= gauge["percentile_1y"] <= 100
+
+    assert "VIX" in render_markdown(report)
+    html = render_html(report)
+    vix_tile = html[html.index("^VIX ·") : html.index("^VIX ·") + 400]
+    assert "$" not in vix_tile  # VIX 是点位不是美元价格
+
+
+def test_fund_trackers_are_grouped(tmp_path: Path) -> None:
+    report = _market_report(tmp_path, lang="zh")
+    groups = {f["group"] for f in report["fund_trackers"]}
+
+    assert groups == {"index", "theme", "macro"}
+    html = render_html(report)
+    for label in ("宽基指数", "主题板块", "跨资产"):
+        assert f'<div class="grp-label">{label}</div>' in html
 
 
 def test_high_risk_section_flags_near_high(tmp_path: Path) -> None:
