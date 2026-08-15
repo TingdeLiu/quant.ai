@@ -461,7 +461,8 @@ def _build_holding_profiles(
     for data in (report.get("quant_candidates") or {}).values():
         for rank, s in enumerate(data.get("symbols", []), start=1):
             standing.setdefault(s["symbol"], []).append(
-                {"label": data.get("label_zh") or data.get("label"), "rank": rank, "score": s.get("score")}
+                # label 已按报告语言本地化；label_zh 只是它的中文兜底，英文报告里不该顶上来。
+                {"label": data.get("label") or data.get("label_zh"), "rank": rank, "score": s.get("score")}
             )
 
     out: list[dict[str, Any]] = []

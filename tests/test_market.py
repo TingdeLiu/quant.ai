@@ -557,6 +557,10 @@ def test_holding_profiles_carry_stats_and_quant_standing(tmp_path: Path) -> None
     assert abs(sum(p["weight_pct"] for p in profiles.values()) - 100.0) < 0.5
     # 上了量化榜的持仓要带名次，字段本身对所有持仓都存在
     assert all(isinstance(p["quant_standing"], list) for p in profiles.values())
+    # 名次标签跟随报告语言：英文报告里不能漏出中文兜底标签（label_zh）
+    labels = [s["label"] for p in profiles.values() for s in p["quant_standing"]]
+    assert labels, "合成数据里应至少有一只持仓上榜，否则下面这条断言形同虚设"
+    assert all(label.isascii() for label in labels), labels
 
 
 def test_holding_profiles_backfill_company_news(tmp_path: Path, monkeypatch) -> None:

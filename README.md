@@ -62,26 +62,40 @@ Install https://github.com/TingdeLiu/quant.ai as an MCP server:
 - 🎯 **Zero-config single-stock analysis** — `analyze AAPL` returns rating, returns, RSI, volatility, MA positions, support/stop levels, and human-readable reasons.
 - 🧩 **Personalized watchlist** — `quant-ai init` builds a universe that is **2/3 your own picks** (companies + sectors you care about) and **1/3 discovered** by the engine from the wider market.
 - 🔬 **Research backtests** — cross-sectional signals (12-1 momentum, 20/50 trend, 1-month reversal, low-vol), signal-weight search, **walk-forward** stability analysis, plus SPY and equal-weight baselines to separate alpha from beta.
-- 📊 **Local dashboard & daily market report** — a no-key market-intelligence brief and an interactive Markets dashboard, served locally.
+- 📊 **Local console** — one page, four tabs (report / markets / backtest diagnostics / ops), served locally with no API key anywhere in the stack.
 - 🛡️ **Safe by design** — deterministic signals + risk layer, friendly degradation on network/data errors, paper trading only — never submits real orders.
 
-## Daily market report & dashboard
+## Daily market report & local console
 
-`quant-ai market-report` builds a daily US-equity research brief — your holdings P&L (with a per-position sparkline), a **per-holding profile card** for every position, a market read (benchmark, breadth, VIX, sector rotation, cross-asset tracker), potential-picks / high-risk lists, quant picks by holding horizon (Chinese name, analyst valuation-range bar, day change, held positions pinned to the top), and free news headlines — in an Anthropic-style design, written as HTML + a self-contained artifact + Markdown + JSON:
+`quant-ai market-report` builds a daily US-equity research brief in an Anthropic-style design, written four ways: a full HTML page, a self-contained artifact fragment, Markdown and JSON. It is a single page with four tabs — **Holdings**, **Market**, **Ideas**, **News** — switched by pure CSS, so they still work inside an AI client's sandboxed artifact view.
 
-<img src="assets/market-report-example.png" alt="Daily market report — your holdings P&L opens the brief" width="820">
+### Holdings — your positions come first
 
-Right under the P&L table, **Holdings at a glance** gives each position its own card: portfolio weight, trend state, 5D/1M/3M returns, annualized volatility, 1-year max drawdown, distance from the 52-week high, strength against the benchmark, the sell-side analyst range, where it stands in the quant lists, its recent headlines, and a click-to-expand 1W–5Y close chart.
+<img src="assets/report-holdings.png" alt="Daily market report — holdings P&L and per-position profile cards" width="820">
+
+The brief opens with your P&L: market value, unrealized gain, day P&L, and a sparkline per position (best-effort live quotes, falling back to the last close). Right under it, **Holdings at a glance** gives each position its own card — portfolio weight, trend state, 5D/1M/3M returns, annualized volatility, 1-year max drawdown, distance from the 52-week high, strength against the benchmark, the sell-side analyst range, where it stands in the quant lists, its recent headlines, and a click-to-expand 1W–5Y close chart.
 
 That section deliberately stops at the facts. It carries **no buy/sell call and no price forecast** — a test asserts the wording never drifts. This is a research tool, not a licensed adviser: it lays out the evidence and leaves the decision to you.
 
-The **Market** tab answers "what is the tape actually doing" rather than just quoting the index: the benchmark's day/5D/1M/3M returns next to its distance from the 52-week high, drawdown and volatility; a **VIX risk gauge** with its trailing-year percentile; **breadth meters** — share of names advancing over 5D/1M and share holding above their 20D/50D moving averages, counted over your single stocks only, so a dozen index ETFs can't flatter the reading; **sector rotation** across the eleven SPDR sector ETFs, ranked by 1-month move with their excess over the benchmark; and a **cross-asset tracker** (Russell 2000, semis, AI, VIX, long Treasuries, gold, the dollar, crude) for where the money is going outside equities.
-
 The per-holding news blurbs are **hand-written and read from `data/news_digest.json`** (`{as_of, digests: {SYMBOL: "one line"}}`) — the project never calls an LLM API for them. When that file's `as_of` is older than the report's data date, each card is stamped "digest as of …", so a stale summary can't pass itself off as today's.
 
-`quant-ai serve-dashboard` (or `write-dashboard`) renders backtest diagnostics — headline metrics, alerts, period breakdown, risk checks, positions and trades — with a built-in **EN / 中文** toggle:
+### Market — what the tape is actually doing
 
-<img src="assets/dashboard-example.png" alt="Local dashboard" width="820">
+<img src="assets/report-market.png" alt="Market tab — benchmark, VIX gauge, breadth meters, sector rotation, cross-asset tracker" width="820">
+
+Rather than just quoting the index: the benchmark's day/5D/1M/3M returns next to its distance from the 52-week high, drawdown and volatility; a **VIX risk gauge** with its trailing-year percentile; **breadth meters** — share of names advancing over 5D/1M and share holding above their 20D/50D moving averages, counted over your single stocks only, so a dozen index ETFs can't flatter the reading; **sector rotation** across the eleven SPDR sector ETFs, ranked by 1-month move with their excess over the benchmark; and a **fund tracker** grouped into broad indices, themes (semis, AI) and cross-asset (VIX, long Treasuries, gold, the dollar, crude) for where the money is going outside equities.
+
+### Ideas — quant picks, potential and high risk
+
+<img src="assets/report-picks.png" alt="Ideas tab — research picks by holding horizon, potential picks and high-risk lists" width="820">
+
+Research picks split by holding horizon (long / medium / short), each with the analyst valuation-range bar, day change, risk and confidence tags — positions you already hold are pinned to the top and highlighted. Below them, the **potential picks** and **high risk** tables spell out the statistical reason each name qualified. Index and sector ETFs are excluded from both lists.
+
+### Local console
+
+`quant-ai serve-dashboard` serves one local page with four tabs — report, markets, backtest diagnostics and ops — reusing the report's own styling instead of a second design. `write-dashboard` writes the backtest-diagnostics page on its own, next to a run's outputs. The page language follows `language:` in your config.
+
+<img src="assets/console-example.png" alt="Local console — backtest diagnostics tab" width="820">
 
 ## Common commands
 
@@ -93,7 +107,7 @@ The per-holding news blurbs are **hand-written and read from `data/news_digest.j
 | `quant-ai analyze --watchlist` | Rate your personalized watchlist |
 | `quant-ai run-backtest --config configs/default.yaml` | Run the research backtest |
 | `quant-ai market-report` | Generate the daily market-intel report |
-| `quant-ai serve-dashboard` | Start the local dashboard service |
+| `quant-ai serve-dashboard` | Start the local console (report / markets / backtest / ops) |
 | `quant-ai doctor` | Environment self-check |
 
 ## How it works
@@ -112,7 +126,7 @@ The per-holding news blurbs are **hand-written and read from `data/news_digest.j
 ## Tests
 
 ```bash
-python -m pytest      # 72 tests, network-free
+python -m pytest      # 106 tests, network-free
 python -m ruff check quant_agent tests conftest.py
 ```
 
