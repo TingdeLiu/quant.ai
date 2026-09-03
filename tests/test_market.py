@@ -904,3 +904,53 @@ def test_report_html_has_expandable_detail_panels(tmp_path: Path) -> None:
     assert stripped.count("<script") == 0, "除 hover 增强外不该再有脚本"
     # 整页版同样带详情面板。
     assert 'class="dp-radio"' in render_html(report)
+
+
+def test_analyst_targets_cached_for_the_day(tmp_path: Path, monkeypatch) -> None:
+    """不注入 target_fetcher 时估值走当日磁盘缓存：取到的当天不再请求，没取到的照常重试，隔日全量重取。"""
+    from quant_agent import market_intel
+
+    config = parse_config(_offline_raw(tmp_path), base=tmp_path)
+    calls: list[list[str]] = []
+    covered: list[str] = []  # 首次请求的第一只视为"有机构覆盖"，其余标的永远取不到
+
+    def fake_fetch(symbols: list[str]) -> dict:
+        calls.append(list(symbols))
+        if not covered:
+            covered.append(symbols[0])
+        return {s: {"low": 80.0, "target": 100.0, "high": 120.0} for s in symbols if s in covered}
+
+    monkeypatch.setattr(market_intel, "fetch_analyst_price_targets", fake_fetch)
+    cache_file = config.data.cache_dir / "analyst_targets.json"
+
+    first = build_market_report(config)
+    assert len(calls) == 1 and calls[0]
+    hit = calls[0][0]
+    assert cache_file.exists()
+    assert json.loads(cache_file.read_text(encoding="utf-8"))["targets"] == {hit: {"low": 80.0, "target": 100.0, "high": 120.0}}
+
+    second = build_market_report(config)
+    assert calls[1] == [s for s in calls[0] if s != hit]  # 命中缓存的不再请求；未取到的重试
+    valuations = {
+        s["symbol"]: s["valuation"] for data in second["quant_candidates"].values() for s in data["symbols"]
+    }
+    assert valuations[hit] == {"low": 80.0, "target": 100.0, "high": 120.0}  # 缓存值原样回到报告
+    assert first["quant_candidates"] == second["quant_candidates"]
+
+    stale = json.loads(cache_file.read_text(encoding="utf-8"))
+    stale["as_of"] = "2000-01-01"
+    cache_file.write_text(json.dumps(stale), encoding="utf-8")
+    build_market_report(config)
+    assert calls[2] == calls[0]  # 隔日缓存作废 -> 全量重取
+
+
+def test_analyst_targets_cache_not_written_when_fetch_fails(tmp_path: Path, monkeypatch) -> None:
+    """一只都没取到（典型是网络挂了）不落盘，避免把故障结果当成当日事实。"""
+    from quant_agent import market_intel
+
+    config = parse_config(_offline_raw(tmp_path), base=tmp_path)
+    monkeypatch.setattr(market_intel, "fetch_analyst_price_targets", lambda symbols: {})
+    report = build_market_report(config)
+
+    assert not (config.data.cache_dir / "analyst_targets.json").exists()
+    assert any(w.startswith("analyst_targets_unavailable") for w in report["warnings"])

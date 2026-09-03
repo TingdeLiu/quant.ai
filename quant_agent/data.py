@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -167,6 +168,7 @@ def _load_yfinance(config: DataConfig, force_refresh: bool = False) -> pd.DataFr
                 cache_path.touch()
             else:
                 _write_cache(existing, cache_path)  # 播种结果落地为本 universe 的数据库
+                _prune_sibling_caches(cache_path)
             return existing
         raise ValueError("yfinance returned no data and no cache is available")
 
@@ -179,6 +181,7 @@ def _load_yfinance(config: DataConfig, force_refresh: bool = False) -> pd.DataFr
     )
     combined = _trim_window(combined, window_start)  # drop data older than the 10y window
     _write_cache(combined, cache_path)
+    _prune_sibling_caches(cache_path)
     return combined
 
 
@@ -187,31 +190,40 @@ def _write_cache(frame: pd.DataFrame, cache_path: Path) -> None:
     frame.to_csv(cache_path, index=False)
 
 
+def _sibling_caches(cache_path: Path) -> list[Path]:
+    """Other universes' cache files in the same directory, newest first (by mtime)."""
+    if not cache_path.parent.exists():
+        return []
+    return sorted(
+        (path for path in cache_path.parent.glob("prices_*.csv") if path.name != cache_path.name),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+
 def _seed_from_sibling_caches(config: DataConfig, window_start: str) -> pd.DataFrame | None:
     """Reuse history for this universe's symbols from other cache files (newest first).
 
     自选池增删会改变缓存键；没有播种的话，加一只股票就要整个 universe 全量重下 10 年。
+    每只标的取自含它的最新一份缓存（滚动库里新文件的历史总不短于旧文件）；全部标的凑齐
+    就停止，不再把余下的旧文件逐个读完。
     """
-    if not config.cache_dir.exists():
-        return None
-    own = _cache_path(config).name
-    candidates = sorted(
-        (path for path in config.cache_dir.glob("prices_*.csv") if path.name != own),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    wanted = set(config.universe)
+    remaining = set(config.universe)
     frames: list[pd.DataFrame] = []
-    for path in candidates:
+    for path in _sibling_caches(_cache_path(config)):
+        if not remaining:
+            break
         try:
             frame = pd.read_csv(path)
         except Exception:
             continue
         if any(column not in frame.columns for column in PRICE_COLUMNS):
             continue
-        subset = frame[frame["symbol"].astype(str).str.upper().isin(wanted)][PRICE_COLUMNS]
+        symbols = frame["symbol"].astype(str).str.upper()
+        subset = frame[symbols.isin(remaining)][PRICE_COLUMNS]
         if not subset.empty:
             frames.append(subset)
+            remaining -= set(symbols[symbols.isin(remaining)].unique())
     if not frames:
         return None
     seeded = pd.concat(frames, ignore_index=True)
@@ -222,6 +234,18 @@ def _seed_from_sibling_caches(config: DataConfig, window_start: str) -> pd.DataF
         .reset_index(drop=True)
     )
     return _trim_window(seeded, window_start)
+
+
+# 旧 universe 的缓存只在播种时有用（改一次自选就多出一份十几 MB 的全量库，且播种会逐个读它们）。
+# 写入新库后只保留最近几份，既控制磁盘占用，也把播种的读盘量封顶。
+_MAX_SIBLING_CACHES = 3
+
+
+def _prune_sibling_caches(cache_path: Path, keep: int = _MAX_SIBLING_CACHES) -> None:
+    """Delete other universes' cache files beyond the ``keep`` newest; the current file is never touched."""
+    for stale in _sibling_caches(cache_path)[keep:]:
+        with contextlib.suppress(OSError):  # 被占用等删不掉的情况不影响主流程，下次写库再试
+            stale.unlink()
 
 
 def _incremental_starts(existing: pd.DataFrame, universe: list[str], window_start: str) -> dict[str, str]:

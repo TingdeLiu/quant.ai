@@ -156,3 +156,68 @@ def test_yf_download_retry_recovers_after_transient_errors(monkeypatch) -> None:
     out = data_mod._yf_download_retry(_FakeYf(), "AAPL", cfg, cfg.start, attempts=3)
     assert not out.empty
     assert calls["n"] == 3
+
+
+def test_seed_stops_reading_siblings_once_universe_is_covered(tmp_path: Path, monkeypatch) -> None:
+    """播种按 mtime 新→旧读旧缓存，全部标的凑齐后不再读余下文件。"""
+    import os
+
+    from quant_agent import data as data_mod
+    from quant_agent.config import DataConfig
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    prices = _synthetic_prices()
+    newest = cache_dir / "prices_2_newest0000.csv"
+    older = cache_dir / "prices_4_older00000.csv"
+    prices[prices["symbol"].isin(["AAA", "SPY"])].to_csv(newest, index=False)
+    prices.to_csv(older, index=False)
+    os.utime(older, (1_000_000, 1_000_000))  # 明确比 newest 旧
+
+    reads: list[str] = []
+    real_read_csv = data_mod.pd.read_csv
+
+    def counting_read_csv(path, *args, **kwargs):
+        reads.append(Path(path).name)
+        return real_read_csv(path, *args, **kwargs)
+
+    monkeypatch.setattr(data_mod.pd, "read_csv", counting_read_csv)
+    cfg = DataConfig(source="yfinance", start="2022-01-01", end=None, cache_dir=cache_dir, universe=["AAA", "SPY"])
+    seeded = data_mod._seed_from_sibling_caches(cfg, "2022-01-01")
+
+    assert reads == [newest.name]  # 最新文件已覆盖全部标的 -> 旧文件根本不读
+    assert sorted(seeded["symbol"].unique()) == ["AAA", "SPY"]
+
+    reads.clear()
+    cfg_new = DataConfig(
+        source="yfinance", start="2022-01-01", end=None, cache_dir=cache_dir, universe=["AAA", "BBB", "SPY"]
+    )
+    seeded = data_mod._seed_from_sibling_caches(cfg_new, "2022-01-01")
+    assert reads == [newest.name, older.name]  # BBB 只在旧文件里 -> 继续往下读
+    assert sorted(seeded["symbol"].unique()) == ["AAA", "BBB", "SPY"]
+
+
+def test_writing_cache_prunes_old_sibling_caches(tmp_path: Path, monkeypatch) -> None:
+    """写入本 universe 的滚动库后，其他 universe 的旧缓存只保留最近 _MAX_SIBLING_CACHES 份。"""
+    import os
+
+    from quant_agent import data as data_mod
+    from quant_agent.config import DataConfig
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    prices = _synthetic_prices()
+    old: list[Path] = []
+    for i in range(5):
+        path = cache_dir / f"prices_4_old{i:02d}00000000.csv"
+        prices.to_csv(path, index=False)
+        os.utime(path, (1_000_000 + i * 60, 1_000_000 + i * 60))  # 序号越大越新
+        old.append(path)
+
+    cfg = DataConfig(source="yfinance", start="2022-01-01", end=None, cache_dir=cache_dir, universe=["AAA", "SPY"])
+    monkeypatch.setattr(data_mod, "_download_yfinance", lambda *a, **k: pd.DataFrame())
+    data_mod._load_yfinance(cfg)
+
+    remaining = {p.name for p in cache_dir.glob("prices_*.csv")}
+    assert data_mod._cache_path(cfg).name in remaining  # 自己的库当然在
+    assert remaining - {data_mod._cache_path(cfg).name} == {p.name for p in old[-data_mod._MAX_SIBLING_CACHES :]}

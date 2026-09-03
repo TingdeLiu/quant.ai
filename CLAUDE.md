@@ -14,9 +14,9 @@ quant-ai market-report                             # 每日报告（默认 confi
 ## 架构速览
 
 - `config.py` — frozen dataclass 体系；`parse_config(raw, base)`；路径一律 `_resolve_path(base, ...)` 解析。`portfolio_path` 默认 `data/portfolio.json`。
-- `data.py` — 滚动价格数据库：按 universe 哈希键控的 CSV（`data/cache/prices_{n}_{hash}.csv`），每日至多刷新一次、≤10 年、按标的增量追加；universe 变化时从旧缓存播种（`_seed_from_sibling_caches`），不整库重下。
+- `data.py` — 滚动价格数据库：按 universe 哈希键控的 CSV（`data/cache/prices_{n}_{hash}.csv`），每日至多刷新一次、≤10 年、按标的增量追加；universe 变化时从旧缓存播种（`_seed_from_sibling_caches`，凑齐即停），不整库重下；写入新库后只保留最近 3 份旧缓存（`_prune_sibling_caches`），播种读盘量与磁盘占用都封顶。
 - `holdings.py` — 聊天管理的自选/持仓存储（`data/portfolio.json`，原子写；损坏 JSON 必须报错而非返回空，防止后续保存毁数据）；`apply_portfolio_universe` 把用户标的叠加进 universe；`build_holdings_snapshot` 算盈亏（实时价尽力取、降级最新收盘）。
-- `market_intel.py` — 每日报告：`build_market_report`（payload）+ 三个渲染器 `render_markdown` / `render_html`（整页，允许网络字体）/ `render_artifact_html`（自包含片段，零外链，明暗双主题）。三者共享 `_html_*` section 构建器；持仓段永远排第一。大盘页由 `_market_overview`（基准多周期 + 广度）/ `_risk_gauge`（VIX 分位）/ `_sector_rotation`（11 只 SPDR 行业 ETF）/ `_fund_tracker_snapshot`（宽基/主题/跨资产三组）四块组成；`FUND_TRACKERS` 与 `SECTOR_ETFS` always-on，会自动并入 universe。
+- `market_intel.py` — 每日报告：`build_market_report`（payload）+ 三个渲染器 `render_markdown` / `render_html`（整页，允许网络字体）/ `render_artifact_html`（自包含片段，零外链，明暗双主题）。三者共享 `_html_*` section 构建器；持仓段永远排第一。分析师目标价经 `fetch_analyst_price_targets_cached` 按自然日缓存在 `data/cache/analyst_targets.json`（只缓存取到的，取不到的下次仍重试）；注入 `target_fetcher` 时绕过缓存。大盘页由 `_market_overview`（基准多周期 + 广度）/ `_risk_gauge`（VIX 分位）/ `_sector_rotation`（11 只 SPDR 行业 ETF）/ `_fund_tracker_snapshot`（宽基/主题/跨资产三组）四块组成；`FUND_TRACKERS` 与 `SECTOR_ETFS` always-on，会自动并入 universe。
 - `console.py` — 本地服务的统一控制台（`/`）：报告 / 行情 / 回测 / 运行 四个标签页，复用 `market_intel.report_css()` 与 `build_tabs()`，不自带视觉。同一文件的 `write_dashboard()` 生成每次 run 的存档诊断页（`/runs/<id>/dashboard` 用）。**内嵌报告时外层标签页必须换 `group` 名**（radio 的 `name` 全局互斥，同名会互相清掉选中态）。
 - `mcp_server.py` — FastMCP，10 个 `quant_*` 工具。约定：pydantic 输入模型继承 `_Base`（`extra="forbid"`）、async + `asyncio.to_thread`、异常统一 `_err()` 返回 `{"error": ...}`；`_load()` 统一叠加 portfolio universe。
 

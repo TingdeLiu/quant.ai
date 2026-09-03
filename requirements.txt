@@ -8,5 +8,5 @@ typer>=0.12
 rich>=13.7
 matplotlib>=3.8
 scikit-learn>=1.4
-mcp>=1.20
+mcp>=1.20,<2   # 2.x 改名 FastMCP->MCPServer，见 pyproject.toml
 pytest>=8.2

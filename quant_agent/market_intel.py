@@ -13,8 +13,10 @@ research candidates derived from public news and historical price statistics.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import html
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -185,6 +187,53 @@ def fetch_analyst_price_targets(symbols: list[str]) -> dict[str, dict[str, float
     return dict(item for item in results if item is not None)
 
 
+# 分析师目标价是约 12 个月的展望，日内不会变；同一天反复出报告（调版式、补归纳）没必要
+# 每次都逐只打 yfinance 的 ``.info``（每只约 1-2 秒，还容易被限流）。按自然日缓存到价格库同目录。
+_TARGET_CACHE_NAME = "analyst_targets.json"
+
+
+def fetch_analyst_price_targets_cached(symbols: list[str], cache_dir: Path) -> dict[str, dict[str, float]]:
+    """``fetch_analyst_price_targets`` behind a same-day on-disk cache (``cache_dir/analyst_targets.json``).
+
+    只缓存取到的结果：没取到的标的下次仍会重试，避免一次网络故障把「暂无覆盖」钉一整天。
+    缓存文件缺失、损坏或不可写都静默降级为直接取数。
+    """
+    if not symbols:
+        return {}
+    path = cache_dir / _TARGET_CACHE_NAME
+    today = datetime.now().date().isoformat()
+    cached = _read_target_cache(path, today)
+    out = {s: cached[s] for s in symbols if s in cached}
+    missing = [s for s in symbols if s not in cached]
+    if missing:
+        # 运行时经模块属性取真实 fetcher（而非 import 期绑定），保证测试可 monkeypatch。
+        fetched = fetch_analyst_price_targets(missing)
+        if fetched:
+            out.update(fetched)
+            _write_target_cache(path, today, {**cached, **fetched})
+    return out
+
+
+def _read_target_cache(path: Path, today: str) -> dict[str, dict[str, float]]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict) or raw.get("as_of") != today or not isinstance(raw.get("targets"), dict):
+        return {}
+    return {str(symbol): value for symbol, value in raw["targets"].items() if isinstance(value, dict)}
+
+
+def _write_target_cache(path: Path, today: str, targets: dict[str, dict[str, float]]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps({"as_of": today, "targets": targets}, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass  # 写不进缓存只是少了加速，不影响报告
+
+
 def _level_zh(level: str) -> str:
     return {"low": "低", "medium": "中", "high": "高"}.get(level, level)
 
@@ -198,10 +247,13 @@ def build_market_report(
 
     ``quote_fetcher`` is injectable for offline tests (None -> live yfinance quotes);
     it is only invoked when the chat-managed portfolio actually has holdings.
-    ``target_fetcher`` is likewise injectable (None -> live yfinance analyst targets);
-    it is only invoked when the quant picks section is non-empty.
+    ``target_fetcher`` is likewise injectable (None -> live yfinance analyst targets behind a
+    same-day cache in ``config.data.cache_dir``); it is only invoked when the quant picks section
+    or the holdings are non-empty.
     """
     mi = config.market_intel
+    if target_fetcher is None:
+        target_fetcher = functools.partial(fetch_analyst_price_targets_cached, cache_dir=config.data.cache_dir)
     lang = normalize_language(config.language)
     generated_at = datetime.now(UTC).isoformat()
 
