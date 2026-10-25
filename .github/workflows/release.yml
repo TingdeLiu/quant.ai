@@ -58,6 +58,9 @@ jobs:
         with:
           name: dist
           path: dist/
+          # 这份产物只需活到下一个 job 把它取走，几秒而已。默认保留 90 天，
+          # 会让每次发版都留一份占着账号的 Actions 存储配额。
+          retention-days: 1
 
   publish:
     name: Publish to PyPI
