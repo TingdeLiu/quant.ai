@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
 import json
 import threading
 import urllib.error
 import urllib.request
+from email import message_from_string
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -16,7 +18,13 @@ from quant_agent.cli import app
 from quant_agent.config import load_config, parse_config
 from quant_agent.demo import prepare_demo
 from quant_agent.market_intel import build_market_report
-from quant_agent.server import MarketIntelJob, RunHistory, RuntimeStatus, _handler_factory
+from quant_agent.server import (
+    MAX_REQUEST_BODY,
+    MarketIntelJob,
+    RunHistory,
+    RuntimeStatus,
+    _handler_factory,
+)
 from quant_agent.workspace import PortfolioChange, render_workspace_html
 
 
@@ -100,6 +108,34 @@ def test_workspace_private_apis_require_auth_and_reject_cross_origin_mutations(w
     assert request("/api/workspace/portfolio", body, origin="https://other.example")[0] == 403
     assert request("/api/workspace/portfolio", body, content_type="text/plain")[0] == 415
     assert not config.portfolio_path.exists()
+
+
+def test_error_responses_drain_the_request_body(tmp_path):
+    """401/403/415 这些不看 body 就拒绝的路径，必须先把请求体读掉。
+
+    服务跑在 HTTP/1.0 上，响应完即关连接；而关闭一个接收缓冲区里尚有未读数据的
+    socket 会让 TCP 发 RST 而不是 FIN，把客户端还没读到的响应一起打掉 —— Windows
+    上报 ConnectionAbortedError。这正是上面那个测试曾经间歇失败的原因（实测
+    403/415 路径失败率 3%–5%），也意味着真实页面的 fetch 会偶尔看到网络错误而不是
+    干净的状态码。这里直接验「排空」这个不变量，不写成概率性测试。
+    """
+    handler_cls = _handler_factory(tmp_path / "config.yaml", parse_config({}, base=tmp_path), None, None)
+
+    def leftover(body: bytes, *, declared: int | None = None, consumed: bool = False) -> bytes:
+        handler = handler_cls.__new__(handler_cls)
+        handler.rfile = io.BytesIO(body)
+        handler.headers = message_from_string(f"Content-Length: {len(body) if declared is None else declared}\n")
+        if consumed:
+            handler._body_consumed = True
+        handler_cls._drain_request_body(handler)
+        return handler.rfile.read()
+
+    assert leftover(b"x" * 500) == b""
+    assert leftover(b"") == b""
+    # 已被 _read_json_body 读过的请求体不重复读，否则会吞掉下一次读取。
+    assert leftover(b"already handled", consumed=True) == b"already handled"
+    # 超过上限的只排空到上限：那种请求本来就被拒，不值得为它读进任意大的数据。
+    assert len(leftover(b"x" * (MAX_REQUEST_BODY + 100))) == 100
 
 
 @pytest.mark.parametrize("body", [
