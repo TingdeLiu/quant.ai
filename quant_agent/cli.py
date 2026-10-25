@@ -194,7 +194,7 @@ def doctor_command() -> None:
     add("Python ≥ 3.11", py_ok, f"当前 {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
 
     # 必需依赖：缺失则自检失败；可选依赖：缺失仅提示，不影响整体结论。
-    required_deps = ["pandas", "numpy", "yfinance", "yaml", "pydantic", "typer", "rich", "sklearn"]
+    required_deps = ["pandas", "numpy", "yfinance", "yaml", "pydantic", "typer", "rich"]
     optional_deps = {"pyarrow": "读取 Parquet 数据", "matplotlib": "--chart 导出图表"}
 
     def check_dep(mod: str, *, required: bool, purpose: str = "") -> None:
