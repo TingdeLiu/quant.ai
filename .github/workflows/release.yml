@@ -14,10 +14,10 @@ jobs:
     name: Build and verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -30,7 +30,7 @@ jobs:
       # PyPI 的版本号不可重用，发错一次就废掉一个版本号。所以 lint、测试和两道
       # 产物检查全部放在 publish 之前 —— ci.yml 只跑分支和 PR，tag 推送不触发它。
       - name: Ruff lint
-        run: python -m ruff check quant_agent tests conftest.py
+        run: python -m ruff check quant_agent tests conftest.py scripts
 
       - name: Run tests
         run: python -m pytest -q
@@ -54,7 +54,7 @@ jobs:
       - name: Verify distributions
         run: python scripts/check_dist.py dist/*
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -71,7 +71,7 @@ jobs:
     permissions:
       id-token: write # 唯一需要的权限：换取 OIDC token。不需要任何 secret。
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
