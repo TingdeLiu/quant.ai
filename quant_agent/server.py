@@ -30,6 +30,8 @@ from quant_agent.workspace import PortfolioChange, render_workspace_html
 STATUS_FILE = "runtime_status.json"
 HISTORY_FILE = "run_history.json"
 MARKET_INTEL_STATUS_FILE = "market_intel_status.json"
+# 请求体上限，同时也是回错误响应前最多排空的字节数（见 _drain_request_body）。
+MAX_REQUEST_BODY = 16384
 
 
 class RunHistory:
@@ -534,7 +536,36 @@ def _handler_factory(
             self.end_headers()
             self.wfile.write(payload)
 
+        def send_error(self, code, message=None, explain=None) -> None:
+            self._drain_request_body()
+            super().send_error(code, message, explain)
+
+        def _drain_request_body(self) -> None:
+            """回响应前把没读过的请求体读掉。
+
+            本服务跑在 HTTP/1.0 上，响应完就关连接；而关闭一个接收缓冲区里尚有
+            未读数据的 socket 会让 TCP 发 RST 而不是 FIN —— 客户端可能连已经发出
+            的响应都读不到，在 Windows 上表现为 ConnectionAbortedError。401/403/
+            415 这些「不看 body 就拒绝」的路径正是如此，实测失败率 3%–5%。
+
+            超过 MAX_REQUEST_BODY 的请求体只排空到上限为止：那种请求本来就被拒，
+            不值得为了让它干净收尾而把任意大的数据读进来。
+            """
+            if getattr(self, "_body_consumed", False):
+                return
+            self._body_consumed = True
+            try:
+                remaining = min(int(self.headers.get("Content-Length") or 0), MAX_REQUEST_BODY)
+            except (TypeError, ValueError):
+                return
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 8192))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+
         def _send_json(self, data: object, code: HTTPStatus = HTTPStatus.OK) -> None:
+            self._drain_request_body()
             payload = json.dumps(data, indent=2, default=str).encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -624,10 +655,11 @@ def _handler_factory(
             except (TypeError, ValueError):
                 self._send_json({"error": "invalid_content_length"}, code=HTTPStatus.BAD_REQUEST)
                 return None
-            if length < 0 or length > 16384:
+            if length < 0 or length > MAX_REQUEST_BODY:
                 self._send_json({"error": "request_too_large"}, code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
                 return None
             raw = self.rfile.read(length) if length > 0 else b""
+            self._body_consumed = True
             if not raw:
                 return {}
             try:
