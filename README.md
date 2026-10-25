@@ -16,6 +16,19 @@ English | [中文](README_CN.md)
 
 ## Quick start
 
+Try the personal research workspace in your browser:
+
+```bash
+pip install -e .
+quant-ai start --demo --open
+```
+
+The isolated demo uses simulated prices and holdings in `.quant-demo/`, with no network requests or access to your real portfolio.
+Add coverage, record holdings, generate a brief, then copy the brief with a research question into your AI assistant.
+Use `quant-ai start --open` for real data; it prefers `configs/my.yaml` when present, otherwise `configs/default.yaml`.
+The workspace runs at `http://127.0.0.1:8765/app`; the advanced console remains at `/`.
+This is a local, single-user beta. Copying a brief includes your recorded holdings. There are no model API calls, hosted accounts or payments.
+
 ```bash
 pip install -e .          # or: pip install -r requirements.txt
 quant-ai doctor           # environment self-check (deps + data connectivity)
@@ -35,8 +48,10 @@ Real output from `quant-ai analyze AAPL` — **English by default**, `--lang zh`
 The headline feature — expose quant.ai as an [MCP](https://modelcontextprotocol.io) server and let your AI assistant call it:
 
 ```bash
-claude mcp add quant-research -- python -m quant_agent.mcp_server
+claude mcp add quant-research -- quant-ai mcp
 ```
+
+Works from any directory. Inside a checkout it uses `./configs`; installed elsewhere it keeps your config and data under `~/.quant-ai/` (override with `$QUANT_AI_HOME`).
 
 Then just ask, in the same chat where you work:
 
@@ -50,7 +65,7 @@ Claude (or Codex) calls into real project data, shows you the quant analysis, an
 Install https://github.com/TingdeLiu/quant.ai as an MCP server:
 1. git clone https://github.com/TingdeLiu/quant.ai && cd quant.ai
 2. pip install -e .
-3. claude mcp add quant-research -- python -m quant_agent.mcp_server
+3. claude mcp add quant-research -- quant-ai mcp
 4. Verify: `claude mcp list` should show quant-research ✓ connected
 ```
 

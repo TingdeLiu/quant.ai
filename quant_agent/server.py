@@ -16,11 +16,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from pydantic import ValidationError
+
+from quant_agent import holdings as holdings_store
 from quant_agent.config import AppConfig, DashboardSecurityConfig, ReportConfig, load_config
 from quant_agent.console import render_console_html
+from quant_agent.i18n import tr
 from quant_agent.market_intel import build_market_report, write_market_report
 from quant_agent.markets_data import build_markets_data
 from quant_agent.pipeline import run_research_backtest
+from quant_agent.workspace import PortfolioChange, render_workspace_html
 
 STATUS_FILE = "runtime_status.json"
 HISTORY_FILE = "run_history.json"
@@ -179,12 +184,13 @@ class RuntimeStatus:
 class MarketIntelJob:
     """Background runner for the daily market intelligence report."""
 
-    def __init__(self, config: AppConfig, status_path: Path):
+    def __init__(self, config: AppConfig, status_path: Path, *, demo: bool = False):
         self.config = config
         self.status_path = status_path
         self.output_dir = config.market_intel.output_dir
         self._lock = threading.Lock()
         self._running = False
+        self.demo = demo
 
     def read_status(self) -> dict[str, Any]:
         if not self.status_path.exists():
@@ -214,7 +220,19 @@ class MarketIntelJob:
     def _run(self) -> None:
         started = _now()
         try:
-            report = build_market_report(self.config)
+            portfolio = holdings_store.load_portfolio(self.config.portfolio_path)
+            research_config = holdings_store.apply_portfolio_universe(self.config)
+            if self.demo:
+                report = build_market_report(research_config, quote_fetcher=lambda _: {}, target_fetcher=lambda _: {})
+                report["disclaimer"] = tr(
+                    "DEMO: all prices and positions are simulated. ",
+                    "演示：所有价格和持仓均为模拟数据。",
+                    self.config.language,
+                ) + report["disclaimer"]
+            else:
+                report = build_market_report(research_config)
+            report["portfolio_updated_at"] = portfolio["updated_at"]
+            report["demo"] = self.demo
             write_market_report(report, self.output_dir)
             self._write_status(
                 {
@@ -311,12 +329,18 @@ class Scheduler:
             self.status.start_job(self.config_path)
 
 
-def run_dashboard_server(config_path: Path, host: str = "127.0.0.1", port: int = 8765) -> None:
+def run_dashboard_server(
+    config_path: Path, host: str = "127.0.0.1", port: int = 8765, *, demo: bool = False, language: str | None = None,
+) -> None:
     config = load_config(config_path)
+    if language is not None:
+        config = replace(config, language=language)
     history = RunHistory(config.dashboard.service_dir / HISTORY_FILE)
     status = RuntimeStatus(config.dashboard.service_dir / STATUS_FILE, history)
     audit_log = OperationAuditLog(config.dashboard_security.audit_log_path)
-    market_intel = MarketIntelJob(config, config.dashboard.service_dir / MARKET_INTEL_STATUS_FILE)
+    market_intel = MarketIntelJob(config, config.dashboard.service_dir / MARKET_INTEL_STATUS_FILE, demo=demo)
+    if demo:
+        market_intel._run()
     scheduler = Scheduler(config_path, config, status)
     scheduler.start()
     handler = _handler_factory(
@@ -343,6 +367,7 @@ def _handler_factory(
     report_dir = config.report.output_dir
     audit_log = audit_log or OperationAuditLog(config.dashboard_security.audit_log_path)
     market_intel = market_intel or MarketIntelJob(config, config.dashboard.service_dir / MARKET_INTEL_STATUS_FILE)
+    portfolio_lock = threading.Lock()
 
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -350,12 +375,34 @@ def _handler_factory(
             path = parsed.path
             if path == "/":
                 self._send_console()
+            elif path == "/app":
+                self._send_html(render_workspace_html(config.language, demo=market_intel.demo))
             elif path in ("/console", "/dashboard", "/markets") or path.startswith("/m/"):
                 self._redirect("/")  # 三个旧页面已并进 / 的标签页
             elif path.startswith("/api/") and not self._authorized("api_read"):
                 return
             elif path == "/api/status":
                 self._send_json(status.read())
+            elif path == "/api/workspace":
+                try:
+                    with portfolio_lock:
+                        portfolio = holdings_store.load_portfolio(config.portfolio_path)
+                    report = market_intel.read_report()
+                    self._send_json({
+                        "portfolio": portfolio,
+                        "report_status": market_intel.read_status(),
+                        "report_available": (market_intel.output_dir / "market_intel_artifact.html").is_file(),
+                        "as_of_date": report.get("as_of_date"),
+                        "data_status": report.get("data_status"),
+                        "report_current": bool(report) and report.get("portfolio_updated_at") == portfolio["updated_at"],
+                        "demo": market_intel.demo,
+                    })
+                except (ValueError, OSError):
+                    self._portfolio_error()
+            elif path == "/api/workspace/report":
+                self._send_file(market_intel.output_dir / "market_intel_artifact.html", "text/html; charset=utf-8")
+            elif path == "/api/workspace/context":
+                self._send_file(market_intel.output_dir / "market_intel.md", "text/plain; charset=utf-8")
             elif path == "/api/audit":
                 self._send_json(_load_json(report_dir / "audit.json"))
             elif path == "/api/operation-audit":
@@ -390,6 +437,12 @@ def _handler_factory(
             path = urlparse(self.path).path
             if path.startswith("/api/") and not self._authorized("api_write"):
                 return
+            if path.startswith("/api/") and not self._same_origin():
+                self._send_json({"error": "cross_origin_request"}, code=HTTPStatus.FORBIDDEN)
+                return
+            if path == "/api/workspace/portfolio":
+                self._change_portfolio()
+                return
             if path == "/api/run":
                 started = status.start_job(config_path)
                 code = HTTPStatus.ACCEPTED if started else HTTPStatus.CONFLICT
@@ -417,6 +470,54 @@ def _handler_factory(
         def log_message(self, format: str, *args: object) -> None:
             return
 
+        def _same_origin(self) -> bool:
+            origin = self.headers.get("Origin")
+            if not origin:
+                return True  # Non-browser clients have no Origin header.
+            parsed = urlparse(origin)
+            return parsed.scheme in ("http", "https") and parsed.netloc == self.headers.get("Host")
+
+        def _portfolio_error(self) -> None:
+            self._send_json({"error": tr(
+                "Portfolio could not be read or saved. Check the portfolio file and its permissions before retrying.",
+                "无法读取或保存持仓。请检查持仓文件是否损坏及文件权限，再重试。",
+                config.language,
+            )}, code=HTTPStatus.CONFLICT)
+
+        def _change_portfolio(self) -> None:
+            if self.headers.get_content_type() != "application/json":
+                self._send_json({"error": "application/json required"}, code=HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+                return
+            body = self._read_json_body()
+            if body is None:
+                return
+            try:
+                change = PortfolioChange.model_validate(body)
+            except ValidationError:
+                self._send_json({"error": tr(
+                    "Enter valid tickers and positive, finite share counts and costs. Check the fields and retry.",
+                    "请检查股票代码、股数和成本；股数和成本必须是有效正数。",
+                    config.language,
+                )}, code=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                with portfolio_lock:
+                    portfolio = holdings_store.load_portfolio(config.portfolio_path)
+                    if change.action == "watchlist.add":
+                        holdings_store.add_watchlist_symbols(portfolio, change.symbols)
+                    elif change.action == "watchlist.remove":
+                        holdings_store.remove_watchlist_symbols(portfolio, change.symbols)
+                    elif change.action == "holding.set":
+                        holdings_store.upsert_holdings(portfolio, [change.position.model_dump()])
+                    else:
+                        holdings_store.remove_holdings(portfolio, change.symbols)
+                    holdings_store.save_portfolio(portfolio, config.portfolio_path)
+            except (ValueError, OSError):
+                self._portfolio_error()
+                return
+            audit_log.append("portfolio_update", status="success", request=self, details={"action": change.action})
+            self._send_json({"portfolio": portfolio})
+
         def _authorized(self, action: str) -> bool:
             if _request_authorized(self.headers, config.dashboard_security):
                 return True
@@ -428,6 +529,7 @@ def _handler_factory(
             payload = html.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
@@ -436,6 +538,7 @@ def _handler_factory(
             payload = json.dumps(data, indent=2, default=str).encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
@@ -488,6 +591,7 @@ def _handler_factory(
             payload = path.read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
@@ -518,7 +622,11 @@ def _handler_factory(
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except (TypeError, ValueError):
-                length = 0
+                self._send_json({"error": "invalid_content_length"}, code=HTTPStatus.BAD_REQUEST)
+                return None
+            if length < 0 or length > 16384:
+                self._send_json({"error": "request_too_large"}, code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                return None
             raw = self.rfile.read(length) if length > 0 else b""
             if not raw:
                 return {}
@@ -527,7 +635,10 @@ def _handler_factory(
             except (json.JSONDecodeError, UnicodeDecodeError):
                 self._send_json({"error": "invalid_json"}, code=HTTPStatus.BAD_REQUEST)
                 return None
-            return data if isinstance(data, dict) else {}
+            if not isinstance(data, dict):
+                self._send_json({"error": "json_object_required"}, code=HTTPStatus.BAD_REQUEST)
+                return None
+            return data
 
     return DashboardHandler
 

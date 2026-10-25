@@ -1,20 +1,23 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+# >=77 才支持 PEP 639 的 license = "MIT" 写法；它自带 wheel 构建，无需单列 wheel。
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "quant-ai"
-version = "0.1.0"
+# 版本号只有 quant_agent/__init__.py 一处。发版 workflow 拿 tag 和它核对，
+# 避免 tag、pyproject、__version__ 三处不一致导致发错版本（PyPI 不可重发）。
+dynamic = ["version"]
 description = "面向普通股民的美股量化研究与回测工具：一行命令分析个股，给出可解释的评级与关键价位。"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Tyndall Labs" }]
 keywords = ["quant", "stocks", "us-equities", "backtest", "technical-analysis", "yfinance"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Financial and Insurance Industry",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Office/Business :: Financial :: Investment",
@@ -47,8 +50,24 @@ Issues = "https://github.com/TingdeLiu/quant.ai/issues"
 [project.scripts]
 quant-ai = "quant_agent.cli:app"
 
-[tool.setuptools.packages.find]
-include = ["quant_agent*"]
+[tool.setuptools]
+# configs/ 以 quant_agent.templates 的名字随 wheel 分发：仓库里只有一份源文件，
+# 安装后由 quant_agent.paths 播种到 ~/.quant-ai/configs/。
+packages = ["quant_agent", "quant_agent.templates"]
+
+[tool.setuptools.dynamic]
+version = { attr = "quant_agent.__version__" }
+
+[tool.setuptools.package-dir]
+"quant_agent.templates" = "configs"
+
+[tool.setuptools.package-data]
+"quant_agent.templates" = ["*.yaml", "*.csv"]
+
+[tool.setuptools.exclude-package-data]
+# 个人文件绝不能进安装包：这几个是本地 gitignore 的自选股与偏好，
+# 按 *.yaml / *.csv 的 glob 会被误收，必须显式排除。
+"quant_agent.templates" = ["my.yaml", "my_universe.csv", "profile.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

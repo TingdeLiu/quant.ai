@@ -31,6 +31,7 @@ from quant_agent.onboarding import (
     write_personal_universe,
 )
 from quant_agent.paper import build_paper_order_plan, load_current_positions, write_paper_order_plan
+from quant_agent.paths import config_write_dir, resolve_config, resolve_data_file
 from quant_agent.pipeline import run_research_backtest
 from quant_agent.portfolio import build_target_positions
 from quant_agent.server import run_dashboard_server
@@ -57,7 +58,7 @@ def _resolve_language(lang: str | None) -> str:
     """语言优先级：--lang 显式 > quant-ai init 存的偏好(configs/profile.json) > 英文。"""
     if lang:
         return normalize_language(lang)
-    profile = Path("configs/profile.json")
+    profile = resolve_data_file("configs/profile.json")
     if profile.exists():
         try:
             return normalize_language(json.loads(profile.read_text(encoding="utf-8")).get("language"))
@@ -71,7 +72,7 @@ def analyze_command(
     symbols: list[str] = typer.Argument(None, help="股票代码，例如 AAPL MSFT NVDA"),
     file: Path | None = typer.Option(None, "--file", "-f", help="自选股文件：每行一个或逗号分隔，# 后为注释"),
     watchlist: bool = typer.Option(False, "--watchlist", "-w", help="分析个性化股票池（quant-ai init 生成的 my_universe.csv）"),
-    watchlist_path: Path = typer.Option(Path("configs/my_universe.csv"), "--watchlist-path", help="个性化股票池 CSV 路径"),
+    watchlist_path: Path | None = typer.Option(None, "--watchlist-path", help="个性化股票池 CSV 路径（默认 configs/my_universe.csv）"),
     lang: str | None = typer.Option(None, "--lang", "-l", help="output language en/zh (default en; uses your init choice if set)"),
     output_dir: Path | None = typer.Option(None, "--output-dir", "-o", help="可选：把分析写入目录（json+md）"),
     chart: bool = typer.Option(False, "--chart", help="额外导出价格+均线+RSI 的 PNG 图（需配合 --output-dir）"),
@@ -83,6 +84,7 @@ def analyze_command(
     if file is not None:
         requested.extend(read_symbols_file(file))
     if watchlist:
+        watchlist_path = watchlist_path or resolve_data_file("configs/my_universe.csv")
         if not watchlist_path.exists():
             console.print("[red]" + tr(
                 f"Personalized watchlist {watchlist_path} not found — run quant-ai init first.",
@@ -235,8 +237,8 @@ def doctor_command() -> None:
 
 
 @app.command("run-backtest")
-def run_backtest_command(config: Path = typer.Option(Path("configs/default.yaml"), "--config", "-c")) -> None:
-    app_config = load_config(config)
+def run_backtest_command(config: Path | None = typer.Option(None, "--config", "-c")) -> None:
+    app_config = load_config(resolve_config(config, names=("default.yaml",)))
     result = run_research_backtest(app_config)
     metrics = result["metrics"]
     console.print("[bold green]Backtest complete[/bold green]")
@@ -248,11 +250,13 @@ def run_backtest_command(config: Path = typer.Option(Path("configs/default.yaml"
 
 @app.command("write-recommended-config")
 def write_recommended_config_command(
-    config: Path = typer.Option(Path("configs/default.yaml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c"),
     weights: Path = typer.Option(Path("reports/latest/recommended_signal_weights.json"), "--weights", "-w"),
-    output: Path = typer.Option(Path("configs/recommended.yaml"), "--output", "-o"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="默认写在所用配置旁边的 recommended.yaml"),
     report_output_dir: str = typer.Option("reports/recommended", "--report-output-dir"),
 ) -> None:
+    config = resolve_config(config, names=("default.yaml",))
+    output = output or config.parent / "recommended.yaml"
     applied = write_recommended_config(config, weights, output, report_output_dir)
     console.print("[bold green]Recommended config written[/bold green]")
     console.print(f"Output: {output}")
@@ -261,10 +265,10 @@ def write_recommended_config_command(
 
 @app.command("data-quality")
 def data_quality_command(
-    config: Path = typer.Option(Path("configs/default.yaml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c"),
     output_dir: Path = typer.Option(Path("reports/data_quality"), "--output-dir", "-o"),
 ) -> None:
-    app_config = load_config(config)
+    app_config = load_config(resolve_config(config, names=("default.yaml",)))
     prices = load_prices(app_config.data)
     report = build_data_quality_report(prices, app_config.data.universe)
     write_data_quality_report(report, output_dir)
@@ -275,11 +279,11 @@ def data_quality_command(
 
 @app.command("plan-paper-orders")
 def plan_paper_orders_command(
-    config: Path = typer.Option(Path("configs/default.yaml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c"),
     current_positions: Path | None = typer.Option(None, "--current-positions"),
     output_dir: Path | None = typer.Option(None, "--output-dir", "-o"),
 ) -> None:
-    app_config = load_config(config)
+    app_config = load_config(resolve_config(config, names=("default.yaml",)))
     prices = load_prices(app_config.data)
     signals = build_signals(prices, app_config.strategy.signal_weights)
     signals, _ = apply_ml_ranking_signal(signals, app_config)
@@ -296,13 +300,12 @@ def plan_paper_orders_command(
 @app.command("market-report")
 def market_report_command(
     config: Path | None = typer.Option(
-        None, "--config", "-c", help="Config path (default: configs/my.yaml if present, else configs/full_roadmap.yaml)"
+        None, "--config", "-c", help="Config path (default: my.yaml if present, else full_roadmap.yaml)"
     ),
     output_dir: Path | None = typer.Option(None, "--output-dir", "-o"),
 ) -> None:
     """Generate a daily US market intelligence report (news + quant + your holdings P&L)."""
-    if config is None:  # 与 MCP server 一致：优先个人配置
-        config = Path("configs/my.yaml") if Path("configs/my.yaml").exists() else Path("configs/full_roadmap.yaml")
+    config = resolve_config(config, names=("my.yaml", "full_roadmap.yaml"))  # 与 MCP server 一致：优先个人配置
     app_config = apply_portfolio_universe(load_config(config))
     report = build_market_report(app_config)
     destination = output_dir or app_config.market_intel.output_dir
@@ -328,12 +331,54 @@ def write_dashboard_command(
 
 @app.command("serve-dashboard")
 def serve_dashboard_command(
-    config: Path = typer.Option(Path("configs/full_roadmap.yaml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c"),
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8765, "--port", "-p"),
 ) -> None:
     """Start the local dashboard and operations service."""
-    run_dashboard_server(config, host=host, port=port)
+    run_dashboard_server(resolve_config(config, names=("full_roadmap.yaml",)), host=host, port=port)
+
+
+@app.command("start")
+def start_command(
+    config: Path | None = typer.Option(None, "--config", "-c", help="Research configuration; defaults to your personal config when present."),
+    demo: bool = typer.Option(False, "--demo", help="Try an isolated demo with simulated prices, fully offline."),
+    lang: str | None = typer.Option(None, "--lang", "-l", help="Interface and report language: en/zh."),
+    port: int = typer.Option(8765, "--port", "-p", min=1, max=65535),
+    open_browser: bool = typer.Option(False, "--open", help="Open the workspace in your browser."),
+) -> None:
+    """Open your personal research workspace: coverage, brief, then discussion with AI."""
+    if lang is not None and lang not in ("en", "zh"):
+        raise typer.BadParameter("Choose en or zh.", param_hint="--lang")
+    if demo and config is not None:
+        raise typer.BadParameter("--demo uses its own isolated configuration; omit --config.")
+    if demo:
+        from quant_agent.demo import prepare_demo
+
+        config = prepare_demo(Path(".quant-demo"), lang or "en")
+    else:
+        config = resolve_config(config)
+    url = f"http://127.0.0.1:{port}/app"
+    console.print(f"[bold]quant.ai[/bold] {url}")
+    if open_browser:
+        import threading
+        import webbrowser
+
+        timer = threading.Timer(1.5, webbrowser.open, args=(url,))
+        timer.daemon = True
+        timer.start()
+    run_dashboard_server(config, port=port, demo=demo, language=lang)
+
+
+@app.command("mcp")
+def mcp_command(
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config the MCP tools default to; auto-detected when omitted."),
+) -> None:
+    """Serve the MCP tools on stdio: claude mcp add quant-research -- quant-ai mcp"""
+    # 延迟导入：FastMCP 只有这个子命令需要，不该拖慢其它命令的启动。
+    from quant_agent.mcp_server import run_stdio
+
+    run_stdio(resolve_config(config, names=("my.yaml", "full_roadmap.yaml")) if config else None)
 
 
 _SOURCE_META = {
@@ -430,9 +475,9 @@ def _write_and_report(frame, profile, configs_dir: Path, base_config: Path, stat
 
 @app.command("init")
 def init_command(
-    catalog_path: Path = typer.Option(Path("configs/catalog.csv"), "--catalog", help="候选股票目录 CSV"),
-    configs_dir: Path = typer.Option(Path("configs"), "--configs-dir", help="生成文件写入目录"),
-    base_config: Path = typer.Option(Path("configs/default.yaml"), "--base-config", help="继承的基础配置"),
+    catalog_path: Path | None = typer.Option(None, "--catalog", help="候选股票目录 CSV"),
+    configs_dir: Path | None = typer.Option(None, "--configs-dir", help="生成文件写入目录（默认 ./configs，装包后为 ~/.quant-ai/configs）"),
+    base_config: Path | None = typer.Option(None, "--base-config", help="继承的基础配置"),
     sectors: list[str] | None = typer.Option(None, "--sector", help="非交互：指定板块（可多次）"),
     tickers: list[str] | None = typer.Option(None, "--ticker", help="非交互：指定关注的股票代码（可多次/逗号分隔）"),
     risk: str | None = typer.Option(None, "--risk", help="research horizon: long_term/medium_term/short_term"),
@@ -442,6 +487,9 @@ def init_command(
     no_discovery: bool = typer.Option(False, "--no-discovery", help="跳过「发现池」（不下载行情，仅写自选部分）"),
 ) -> None:
     """First-run setup: a few questions build a 2/3 self-picked + 1/3 discovered watchlist."""
+    catalog_path = catalog_path or resolve_data_file("configs/catalog.csv")
+    configs_dir = configs_dir or config_write_dir()
+    base_config = base_config or resolve_config(names=("default.yaml",))
     if not catalog_path.exists():
         console.print(f"[red]Catalog not found: {catalog_path}[/red]")
         raise typer.Exit(code=2)
@@ -498,12 +546,16 @@ def init_command(
 
 @app.command("refresh-universe")
 def refresh_universe_command(
-    profile_path: Path = typer.Option(Path("configs/profile.json"), "--profile", help="quant-ai init 生成的偏好文件"),
-    catalog_path: Path = typer.Option(Path("configs/catalog.csv"), "--catalog"),
-    configs_dir: Path = typer.Option(Path("configs"), "--configs-dir"),
-    base_config: Path = typer.Option(Path("configs/default.yaml"), "--base-config"),
+    profile_path: Path | None = typer.Option(None, "--profile", help="quant-ai init 生成的偏好文件"),
+    catalog_path: Path | None = typer.Option(None, "--catalog"),
+    configs_dir: Path | None = typer.Option(None, "--configs-dir"),
+    base_config: Path | None = typer.Option(None, "--base-config"),
 ) -> None:
     """Recompute the 1/3 discovery picks from your saved profile (your 2/3 stays)."""
+    profile_path = profile_path or resolve_data_file("configs/profile.json")
+    catalog_path = catalog_path or resolve_data_file("configs/catalog.csv")
+    configs_dir = configs_dir or config_write_dir()
+    base_config = base_config or resolve_config(names=("default.yaml",))
     if not profile_path.exists():
         console.print(f"[red]Profile not found: {profile_path} — run quant-ai init first.[/red]")
         raise typer.Exit(code=2)

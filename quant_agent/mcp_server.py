@@ -34,6 +34,7 @@ from quant_agent.data_quality import build_data_quality_report
 from quant_agent.features import build_signals
 from quant_agent.market_intel import _collect_feeds, build_market_report, render_markdown, write_market_report
 from quant_agent.markets_data import build_markets_data
+from quant_agent.paths import resolve_config
 from quant_agent.portfolio import build_target_positions
 from quant_agent.recommendations import RECOMMENDATION_PROFILES, build_recommendations
 
@@ -57,10 +58,12 @@ MCP_INSTRUCTIONS = (
 )
 mcp = FastMCP("quant_research_mcp", instructions=MCP_INSTRUCTIONS)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-# Default to the user's personal watchlist config so the tools only pull the symbols
-# they care about. Falls back to the committed full_roadmap.yaml if it's absent.
-DEFAULT_CONFIG = "configs/my.yaml" if (PROJECT_ROOT / "configs/my.yaml").exists() else "configs/full_roadmap.yaml"
+# 留空表示「按解析链自动定位」：源码树里优先 ./configs/my.yaml，pip 装完则用
+# ~/.quant-ai/configs/。不能在 import 期算死 —— MCP server 的工作目录由宿主客户端
+# 决定，而装包后 Path(__file__).parent.parent 指向 site-packages，那里没有 configs/。
+DEFAULT_CONFIG = ""
+# `quant-ai mcp --config X` 设定的全局默认；留空则每次调用各自解析。
+_CONFIG_OVERRIDE: Path | None = None
 DISCLAIMER = "Research only. Not investment advice; no live-trading authorization."
 
 
@@ -69,17 +72,11 @@ DISCLAIMER = "Research only. Not investment advice; no live-trading authorizatio
 # --------------------------------------------------------------------------- #
 
 
-def _resolve_config_path(config: str) -> Path:
-    path = Path(config)
-    return path if path.is_absolute() else PROJECT_ROOT / path
-
-
 def _load(config: str) -> AppConfig:
-    config_path = _resolve_config_path(config)
+    config_path = resolve_config(config or _CONFIG_OVERRIDE, names=("my.yaml", "full_roadmap.yaml"))
     if not config_path.exists():
         raise FileNotFoundError(
-            f"Config not found: {config_path}. Provide a path relative to the project root "
-            f"(e.g. 'configs/full_roadmap.yaml')."
+            f"Config not found: {config_path}. Pass an absolute path, or run `quant-ai init` to create one."
         )
     # 叠加聊天管理的自选/持仓：所有工具的 universe 自动覆盖用户标的。
     return holdings_store.apply_portfolio_universe(load_config(config_path))
@@ -101,7 +98,7 @@ class _Base(BaseModel):
 class ConfigInput(_Base):
     config: str = Field(
         default=DEFAULT_CONFIG,
-        description="Config file path relative to the project root (e.g. 'configs/full_roadmap.yaml').",
+        description="Optional config file path. Leave empty to use the active research config.",
     )
     refresh: bool = Field(
         default=False,
@@ -627,5 +624,12 @@ async def quant_read_report(params: ReadReportInput) -> str:
         return f"Error: {type(exc).__name__}: {exc}"
 
 
-if __name__ == "__main__":
+def run_stdio(config: Path | None = None) -> None:
+    """stdio 模式启动；`quant-ai mcp` 与 `python -m quant_agent.mcp_server` 都走这里。"""
+    global _CONFIG_OVERRIDE
+    _CONFIG_OVERRIDE = Path(config) if config else None
     mcp.run()
+
+
+if __name__ == "__main__":
+    run_stdio()

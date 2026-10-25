@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 
+from quant_agent import paths
 from quant_agent.i18n import normalize_language
 
 
@@ -200,8 +201,22 @@ def load_config(path: str | Path) -> AppConfig:
     config_path = Path(path)
     with config_path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
-    base = config_path.parent.parent if config_path.parent.name == "configs" else Path.cwd()
-    return parse_config(raw, base=base)
+    return parse_config(raw, base=_base_for(config_path))
+
+
+def _base_for(config_path: Path) -> Path:
+    """数据根目录：配置里的相对路径（data/cache、reports/latest）都挂在它下面。
+
+    名为 configs 的目录取祖父目录，所以 `./configs/my.yaml` 落在仓库根、
+    `~/.quant-ai/configs/default.yaml` 落在 `~/.quant-ai` —— 安装场景不需要额外规则。
+    唯一的例外是包内模板目录：它只读，直接加载时必须把数据改落用户目录，
+    否则会往 site-packages 里写缓存和报告。
+    """
+    if paths.is_template(config_path):
+        return paths.home()
+    if config_path.parent.name == "configs":
+        return config_path.parent.parent
+    return Path.cwd()
 
 
 def parse_config(raw: dict[str, Any], base: Path | None = None) -> AppConfig:

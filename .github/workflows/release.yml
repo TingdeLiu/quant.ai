@@ -1,0 +1,80 @@
+name: Release
+
+# 打一个 vX.Y.Z 的 tag 即发版。用 PyPI 的 trusted publishing（OIDC）换取上传凭据，
+# 仓库里不存任何 token。首次使用前要在 PyPI 上登记 pending publisher：见 docs/releasing.md。
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" build
+
+      # PyPI 的版本号不可重用，发错一次就废掉一个版本号。所以 lint、测试和两道
+      # 产物检查全部放在 publish 之前 —— ci.yml 只跑分支和 PR，tag 推送不触发它。
+      - name: Ruff lint
+        run: python -m ruff check quant_agent tests conftest.py
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Tag must match quant_agent.__version__
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(python -c 'import quant_agent; print(quant_agent.__version__)')"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match quant_agent.__version__ (${version})"
+            exit 1
+          fi
+          echo "Releasing ${version}"
+
+      - name: Build sdist and wheel
+        # 清掉 build/：里面是第二份 quant_agent，留着会被后续步骤和 pytest 一起收集。
+        run: |
+          rm -rf build dist
+          python -m build
+
+      - name: Verify distributions
+        run: python scripts/check_dist.py dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # 这个 environment 是 trusted publishing 的身份凭证之一，名字必须和 PyPI 上
+    # 登记的一致。在仓库设置里给它加 required reviewers，每次发版就要你手动放行。
+    environment:
+      name: pypi
+      url: https://pypi.org/p/quant-ai
+    permissions:
+      id-token: write # 唯一需要的权限：换取 OIDC token。不需要任何 secret。
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1

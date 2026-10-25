@@ -16,6 +16,30 @@
 
 ## 快速开始
 
+**第一次体验产品：**
+
+```bash
+pip install -e .
+quant-ai start --demo --lang zh --open
+```
+
+浏览器打开个人研究台：添加自选 → 记录持仓 → 生成简报 → 复制「简报＋研究问题」给你的 AI 助手。
+演示模式全程离线，价格与持仓均为模拟数据，保存在独立的 `.quant-demo/` 中，不读取或修改你的真实持仓。
+
+开始使用真实数据：
+
+```bash
+quant-ai start --lang zh --open
+```
+
+默认优先使用 `configs/my.yaml`，否则使用 `configs/default.yaml`；可用 `--config` 指定配置。
+研究台地址为 `http://127.0.0.1:8765/app`，高级控制台仍位于 `/`。首次真实报告可能需要几分钟取数。
+自选和持仓与 MCP 共用配置指定的持仓文件；修改后会提示重新生成简报。
+「复制简报与问题」会包含你记录的持仓，由你粘贴到 AI 客户端后继续研究；项目自身不调用模型 API。
+这是本机单用户试用版，尚未提供在线多用户账号或支付。详见[试用说明](docs/product_beta.md)。
+
+**命令行使用：**
+
 ```bash
 pip install -e .          # 或：pip install -r requirements.txt
 quant-ai doctor           # 环境自检（依赖 + 数据连通性）
@@ -35,8 +59,10 @@ quant-ai analyze AAPL     # 秒级评级一只股票
 头号特性——把 quant.ai 暴露为 [MCP](https://modelcontextprotocol.io) server，让你的 AI 助手直接调用：
 
 ```bash
-claude mcp add quant-research -- python -m quant_agent.mcp_server
+claude mcp add quant-research -- quant-ai mcp
 ```
+
+在任何目录下都能跑：源码树里用 `./configs`，装在别处则把配置和数据放在 `~/.quant-ai/`（可用 `$QUANT_AI_HOME` 覆盖）。
 
 然后在你日常工作的对话里直接问：
 
@@ -50,7 +76,7 @@ Claude（或 Codex）会调取项目的真实数据，把量化分析摆在你�
 把 https://github.com/TingdeLiu/quant.ai 安装为 MCP server：
 1. git clone https://github.com/TingdeLiu/quant.ai && cd quant.ai
 2. pip install -e .
-3. claude mcp add quant-research -- python -m quant_agent.mcp_server
+3. claude mcp add quant-research -- quant-ai mcp
 4. 用 `claude mcp list` 验证（应显示 quant-research ✓ connected）
 ```
 
@@ -101,6 +127,8 @@ Claude（或 Codex）会调取项目的真实数据，把量化分析摆在你�
 
 | 命令 | 作用 |
 | --- | --- |
+| `quant-ai start --lang zh --open` | 打开个人研究台，管理关注并生成简报 |
+| `quant-ai start --demo --lang zh --open` | 体验独立保存、全程离线的模拟数据演示 |
 | `quant-ai analyze AAPL MSFT NVDA` | 评级一只或多只股票 |
 | `quant-ai analyze --file watchlist.txt` | 从文件读取代码并评级 |
 | `quant-ai init` | 交互式生成个性化股票池 |
