@@ -10,7 +10,7 @@
 
 ## 技术栈和目录
 
-- Python 3.11+；pandas / NumPy 处理时间序列；scikit-learn 提供可选 Ridge 排名。
+- Python 3.11+；pandas / NumPy 处理时间序列；可选的 Ridge 排名用 NumPy 闭式解自带实现，不依赖 scikit-learn。
 - yfinance 与本地 CSV / Parquet 数据；CSV 行情缓存、JSON 用户记账与报告文件。
 - Typer CLI、FastMCP 接口、标准库 HTTP 本地控制台；pytest 离线测试、ruff 静态检查。
 - `quant_agent/`：实现；`configs/`：策略及运行配置；`tests/`：离线测试；`reports/`：研究产物；`data/`：行情缓存及用户数据。

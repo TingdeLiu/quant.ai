@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
-from sklearn.linear_model import Ridge
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 
 from quant_agent.config import AppConfig, EvaluationPeriod
 from quant_agent.features import BASE_SIGNAL_COLUMNS, weighted_score
@@ -20,6 +19,57 @@ ML_FEATURE_COLUMNS = [
     "ret_1d",
     "volatility_20",
 ]
+
+# StandardScaler 判定「常数列」的阈值，照搬 sklearn 的 _handle_zeros_in_scale。
+_ZERO_SCALE = 10 * np.finfo(float).eps
+
+
+@dataclass(frozen=True)
+class _StandardizedRidge:
+    """标准化 + 岭回归的闭式解。
+
+    等价于 sklearn 的 Pipeline([("scale", StandardScaler()), ("ridge", Ridge(alpha))])，
+    自己实现是为了不为这一处而扛上 scikit-learn —— 它是全项目唯一用到 sklearn 的
+    地方，却是所有依赖里最重、也最容易在收紧了未签名 DLL 策略的 Windows 上装不上
+    的一个。tests/test_ml.py 用 sklearn 当年的输出做金标准，锁住这份等价性。
+    """
+
+    mean: np.ndarray
+    scale: np.ndarray
+    coef: np.ndarray
+    intercept: float
+
+    def predict(self, features: pd.DataFrame) -> np.ndarray:
+        standardized = (features.to_numpy(dtype=float) - self.mean) / self.scale
+        return standardized @ self.coef + self.intercept
+
+
+def _fit_standardized_ridge(features: pd.DataFrame, target: pd.Series, alpha: float = 1.0) -> _StandardizedRidge:
+    x = features.to_numpy(dtype=float)
+    y = target.to_numpy(dtype=float)
+
+    mean = x.mean(axis=0)
+    scale = x.std(axis=0)  # ddof=0，与 StandardScaler 一致
+    # 常数列标准差为 0：把尺度置 1，否则除零会让整列变成 NaN 或 inf。
+    scale = np.where(scale > _ZERO_SCALE, scale, 1.0)
+    standardized = (x - mean) / scale
+
+    # Ridge(fit_intercept=True) 不惩罚截距：先把 X 与 y 中心化解出系数，再回推截距。
+    column_mean = standardized.mean(axis=0)
+    target_mean = y.mean()
+    centered = standardized - column_mean
+    # 目标是 ||y - Xw||² + alpha·||w||²，无 1/n 缩放，故闭式解为 (XᵀX + αI)⁻¹Xᵀy。
+    # alpha > 0 保证了正定，不会奇异。
+    gram = centered.T @ centered
+    gram[np.diag_indices_from(gram)] += alpha
+    coef = np.linalg.solve(gram, centered.T @ (y - target_mean))
+
+    return _StandardizedRidge(
+        mean=mean,
+        scale=scale,
+        coef=coef,
+        intercept=float(target_mean - column_mean @ coef),
+    )
 
 
 def apply_ml_ranking_signal(signals: pd.DataFrame, config: AppConfig) -> tuple[pd.DataFrame, dict[str, Any]]:
@@ -49,8 +99,7 @@ def apply_ml_ranking_signal(signals: pd.DataFrame, config: AppConfig) -> tuple[p
         diagnostics["status"] = "skipped_insufficient_training_rows"
         return frame, diagnostics
 
-    model = Pipeline([("scale", StandardScaler()), ("ridge", Ridge(alpha=1.0))])
-    model.fit(train[ML_FEATURE_COLUMNS], train["future_return"])
+    model = _fit_standardized_ridge(train[ML_FEATURE_COLUMNS], train["future_return"])
     frame["ml_rank"] = pd.NA
     frame.loc[scored.index, "ml_rank"] = model.predict(scored[ML_FEATURE_COLUMNS])
     frame["ml_rank"] = pd.to_numeric(frame["ml_rank"], errors="coerce")
@@ -59,8 +108,7 @@ def apply_ml_ranking_signal(signals: pd.DataFrame, config: AppConfig) -> tuple[p
     diagnostics["status"] = "trained"
     diagnostics["scored_rows"] = int(frame["ml_rank"].notna().sum())
     diagnostics["coefs"] = {
-        feature: float(coef)
-        for feature, coef in zip(ML_FEATURE_COLUMNS, model.named_steps["ridge"].coef_, strict=True)
+        feature: float(coef) for feature, coef in zip(ML_FEATURE_COLUMNS, model.coef, strict=True)
     }
     return frame, diagnostics
 

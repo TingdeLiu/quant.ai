@@ -34,6 +34,7 @@ from quant_agent.data_quality import build_data_quality_report
 from quant_agent.features import build_signals
 from quant_agent.market_intel import _collect_feeds, build_market_report, render_markdown, write_market_report
 from quant_agent.markets_data import build_markets_data
+from quant_agent.ml import apply_ml_ranking_signal
 from quant_agent.paths import resolve_config
 from quant_agent.portfolio import build_target_positions
 from quant_agent.recommendations import RECOMMENDATION_PROFILES, build_recommendations
@@ -377,10 +378,6 @@ async def quant_get_recommendations(params: RecommendationsInput) -> dict[str, A
     try:
         config = _load(params.config)
         await _prewarm(config, params.refresh)
-        # Deferred to call time: scikit-learn is only needed by the ML ranking, so the
-        # stdio server boots (and the sklearn-free tools work) without loading it.
-        from quant_agent.ml import apply_ml_ranking_signal
-
         def _compute() -> dict[str, Any]:
             prices = load_prices(config.data)
             signals = build_signals(prices, config.strategy.signal_weights)
@@ -513,7 +510,9 @@ async def quant_run_backtest(params: ConfigInput) -> dict[str, Any]:
     try:
         config = _load(params.config)
         await _prewarm(config, params.refresh)
-        # Deferred to call time (the pipeline pulls in scikit-learn via ML ranking).
+        # Deferred to call time: the pipeline pulls in ~15 project modules (backtest,
+        # optimization, alerts, console …) that only this tool needs, so the stdio
+        # server boots without them.
         from quant_agent.pipeline import run_research_backtest
 
         result = await asyncio.to_thread(run_research_backtest, config)
